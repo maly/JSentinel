@@ -362,13 +362,17 @@ export class Game {
   // The drained unit becomes a tree, preferably on a flat tile the sentinel
   // currently sees; if its whole view offers no spot, anywhere else.
   _spawnTreeInFov(sentinel) {
+    // Only EMPTY flat tiles — the sentinel plants trees on the ground, never
+    // on top of somebody's boulder stack.
+    const empty = (x, z) => this.world.objectsAt(x, z).length === 0;
     const inFov = this._randomTile((x, z, tile) => tile.flat
+      && empty(x, z)
       && this.world.canPlace('tree', x, z)
       && this._sentinelSees(sentinel, {
-        x: x + 0.5, z: z + 0.5, y: this.world.topAt(x, z) + 0.05,
+        x: x + 0.5, z: z + 0.5, y: this.world.surfaceY(x, z) + 0.05,
       }));
     const tile = inFov
-      ?? this._randomTile((x, z, t) => t.flat && this.world.canPlace('tree', x, z));
+      ?? this._randomTile((x, z, t) => t.flat && empty(x, z) && this.world.canPlace('tree', x, z));
     if (tile) this.world.addObject({ type: 'tree', x: tile.x, z: tile.z, dissolve: 0 });
   }
 
