@@ -106,7 +106,7 @@ export class Game {
       case 'robot':
         return this._create(action, pickResult?.tile ?? null, pickResult);
       case 'transfer':
-        return this._transfer(pickResult?.object ?? null);
+        return this._transfer(pickResult);
       case 'hyperspace':
         return this._hyperspace();
       case 'uturn':
@@ -213,12 +213,26 @@ export class Game {
     return true;
   }
 
-  _transfer(object) {
-    // Consciousness can only transfer into robot shells.
+  _transfer(pickResult) {
+    if (!pickResult) return false;
+    // Unlike absorb, transfer targets the robot ITSELF: hitting its body with
+    // the crosshair ray is enough (the ray proves you see it). Pointing at
+    // its square also works and resolves to the robot standing on top.
+    let object = pickResult.object ?? null;
+    if (!object && pickResult.tile) {
+      const stack = this.world.objectsAt(pickResult.tile.x, pickResult.tile.z);
+      object = stack[stack.length - 1] ?? null;
+    }
     if (!object || object.type !== 'robot' || object.id === this.playerShellId) {
       return false;
     }
-    if (!this.world.isTopObject(object) || !this._canSeeRestingSquare(object)) {
+    if (!this.world.isTopObject(object)) {
+      this._message('Transfer target is not visible');
+      return false;
+    }
+    // A pick with a hit point came from the crosshair ray — visibility proven.
+    const seen = pickResult.point ? true : this._canSeeRestingSquare(object);
+    if (!seen) {
       this._message('Transfer target is not visible');
       return false;
     }
