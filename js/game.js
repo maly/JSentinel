@@ -139,13 +139,20 @@ export class Game {
 
   _absorb(pickResult) {
     if (!pickResult) return false;
-    // As in the original: absorption works ONLY by pointing at the SQUARE the
-    // object stands on. Pointing at the object's body does nothing.
+    // As in the original: absorption targets the SQUARE the object stands on.
+    // Hitting the object's body is forgiven when the ray, continued past it,
+    // would land in that same square — a near-miss of the base still counts.
     if (pickResult.object) {
-      this._message('Aim at the square the object stands on');
-      return false;
+      const gt = pickResult.groundTile;
+      const o = pickResult.object;
+      if (!gt || gt.x !== o.x || gt.z !== o.z) {
+        this._message('Aim at the square the object stands on');
+        return false;
+      }
     }
-    const tile = pickResult.tile;
+    const tile = pickResult.object
+      ? { x: pickResult.object.x, z: pickResult.object.z }
+      : pickResult.tile;
     if (!tile) return false;
     const stack = this.world.objectsAt(tile.x, tile.z);
     const object = stack[stack.length - 1] ?? null;

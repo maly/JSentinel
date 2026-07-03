@@ -65,6 +65,20 @@ function objectRadius(object) {
   return object.radius ?? OBJECT_RADIUS[object.type] ?? DEFAULT_RADIUS;
 }
 
+// Collision radius at a given height above the object's base. A tree is NOT
+// a fat full-height cylinder: near the ground only the thin trunk collides,
+// and the foliage cone tapers to a point — otherwise clicks landing visually
+// in the square next to a trunk (or past a slanted canopy) hit invisible
+// volume and get swallowed.
+function objectRadiusAt(object, heightAboveBase) {
+  if (object.type === 'tree') {
+    const FOLIAGE_BASE = 0.7, TOP = 3.0, FOLIAGE_R = 0.5;
+    if (heightAboveBase < FOLIAGE_BASE) return 0.12;               // trunk
+    return FOLIAGE_R * Math.max(0, (TOP - heightAboveBase) / (TOP - FOLIAGE_BASE));
+  }
+  return objectRadius(object);
+}
+
 function objectCenter(object) {
   return { x: object.x + 0.5, z: object.z + 0.5 };
 }
@@ -200,6 +214,11 @@ export class World {
     return true;
   }
 
+  // Marches the crosshair ray. Returns the first hit (object or terrain) plus
+  // `groundTile` — the tile the ray would reach on TERRAIN if all objects were
+  // ignored. Near-misses of an object's base square can then be forgiven:
+  // hitting a trunk while the ray would land in the same square still counts
+  // as pointing at that square.
   pickTarget(rayOrigin, rayDir) {
     const origin = this._point(rayOrigin);
     const direction = normalize3(rayDir);
@@ -207,6 +226,7 @@ export class World {
 
     const maxDistance = 80;
     const stepSize = 0.05;
+    let objectHit = null;
     for (let distance = stepSize; distance <= maxDistance; distance += stepSize) {
       const point = {
         x: origin.x + direction.x * distance,
@@ -214,31 +234,49 @@ export class World {
         z: origin.z + direction.z * distance,
       };
 
-      for (const object of this.objects) {
-        if (this._pointInsideObject(origin, object)) continue;
-        if (this._pointInsideObject(point, object)) {
-          return {
-            tile: { x: object.x, z: object.z },
-            object,
-            point,
-          };
+      if (!objectHit) {
+        for (const object of this.objects) {
+          if (this._pointInsideObject(origin, object)) continue;
+          if (this._pointInsideObject(point, object)) {
+            objectHit = { object, point };
+            break;
+          }
         }
       }
 
       if (!this._worldPointInBounds(point.x, point.z)) continue;
       const terrainY = this.terrainYAt(point.x, point.z);
       if (point.y <= terrainY + 0.02) {
+        const groundTile = {
+          x: clamp(Math.floor(point.x), 0, this.width - 1),
+          z: clamp(Math.floor(point.z), 0, this.depth - 1),
+        };
+        if (objectHit) {
+          return {
+            tile: { x: objectHit.object.x, z: objectHit.object.z },
+            object: objectHit.object,
+            point: objectHit.point,
+            groundTile,
+          };
+        }
         return {
-          tile: {
-            x: clamp(Math.floor(point.x), 0, this.width - 1),
-            z: clamp(Math.floor(point.z), 0, this.depth - 1),
-          },
+          tile: groundTile,
           object: null,
           point: { x: point.x, y: terrainY, z: point.z },
+          groundTile,
         };
       }
     }
 
+    if (objectHit) {
+      // Ray hit an object but never reached terrain (e.g. sky behind).
+      return {
+        tile: { x: objectHit.object.x, z: objectHit.object.z },
+        object: objectHit.object,
+        point: objectHit.point,
+        groundTile: null,
+      };
+    }
     return null;
   }
 
@@ -265,13 +303,12 @@ export class World {
 
   _pointInsideObject(point, object) {
     const center = objectCenter(object);
-    const radius = objectRadius(object);
     const y = object.y ?? this.surfaceY(object.x, object.z);
+    if (point.y < y - 0.02 || point.y > y + objectHeight(object) + 0.02) return false;
+    const radius = objectRadiusAt(object, point.y - y);
     const dx = point.x - center.x;
     const dz = point.z - center.z;
-    return dx * dx + dz * dz <= radius * radius
-      && point.y >= y - 0.02
-      && point.y <= y + objectHeight(object) + 0.02;
+    return dx * dx + dz * dz <= radius * radius;
   }
 }
 

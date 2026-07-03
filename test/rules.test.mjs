@@ -35,12 +35,20 @@ function testEnergyEconomy() {
   assert.equal(game.doAction('boulder', { tile: { x: 2, z: 0 } }), true);
   assert.equal(game.energy, 10 - ENERGY.boulder);
 
-  // Pointing at the object's body must NOT absorb — only its square works.
-  assert.equal(game.doAction('absorb', { tile: { x: 1, z: 2 }, object: tree, point: { x: 1.5, y: 1, z: 2.5 } }), false);
+  // Pointing at the object's body must NOT absorb when the continued ray
+  // would land in a DIFFERENT square (groundTile mismatch / sky).
+  assert.equal(game.doAction('absorb', { tile: { x: 1, z: 2 }, object: tree, point: { x: 1.5, y: 1, z: 2.5 }, groundTile: { x: 5, z: 5 } }), false);
+  assert.equal(game.doAction('absorb', { tile: { x: 1, z: 2 }, object: tree, point: { x: 1.5, y: 1, z: 2.5 }, groundTile: null }), false);
   assert.equal(world.objects.includes(tree), true);
-  assert.equal(game.doAction('absorb', { tile: { x: 1, z: 2 }, object: null, point: { x: 1.5, y: 0, z: 2.5 } }), true);
-  assert.equal(game.energy, 10 - ENERGY.boulder + ENERGY.tree);
+  // ...but a near-miss is forgiven when the ray would continue into the
+  // object's own square.
+  assert.equal(game.doAction('absorb', { tile: { x: 1, z: 2 }, object: tree, point: { x: 1.5, y: 1, z: 2.5 }, groundTile: { x: 1, z: 2 } }), true);
   assert.equal(world.objects.includes(tree), false);
+  // Absorb via the square itself (classic path).
+  world.addObject({ type: 'tree', x: 1, z: 2 });
+  assert.equal(game.doAction('absorb', { tile: { x: 1, z: 2 }, object: null, point: { x: 1.5, y: 0, z: 2.5 } }), true);
+  assert.equal(game.energy, 10 - ENERGY.boulder + 2 * ENERGY.tree);
+  assert.equal(world.objectsAt(1, 2).length, 0);
 
   // Unaffordable create just fails — death only comes from hyperspace/drain.
   game.energy = ENERGY.robot - 1;

@@ -267,7 +267,11 @@ function coneFaces(y0, y1, radius, segments, col) {
   // because the open cone bottom exposes the culled interior. Reversed order
   // gives the -Y normal so the disk survives backface culling from underneath
   // (and is correctly culled from above, where the foliage hides it anyway).
-  faces.push({ v: [...base].reverse(), c: col });
+  // depthMode 'max': the wide disk's centroid is often nearer the camera than
+  // the thin trunk below it, so a per-centroid sort would paint the disk OVER
+  // the trunk when viewed from underneath. Sorting the disk by its farthest
+  // vertex paints it first, so the trunk correctly overlaps it.
+  faces.push({ v: [...base].reverse(), c: col, depthMode: 'max' });
   return faces;
 }
 
@@ -425,7 +429,7 @@ function emitObject(list, view, world, o) {
       const rz = -sy * lv[0] + cy * lv[2];
       wv[i] = { x: px + rx, y: baseY + lv[1], z: pz + rz };
     }
-    buildPoly(list, view, wv, shade(face.c, bright), true, null, 'avg', alpha);
+    buildPoly(list, view, wv, shade(face.c, bright), true, null, face.depthMode ?? 'avg', alpha);
   }
 }
 
