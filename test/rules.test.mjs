@@ -152,6 +152,18 @@ function testMeanieTriggerWhenHeadVisibleBaseHidden() {
   assert.equal(game.scannedBySentinel, true);
   // Head visible but base hidden => scan state 1 ("seen", cannot drain).
   assert.equal(game.scanState, 1);
+
+  // The meanie spawns facing away and sweeps slowly — the player gets a real
+  // reaction window before the forced hyperspace...
+  const energyBefore = game.energy;
+  tickSeconds(game, 1);
+  assert.equal(game.status, 'playing');
+  assert.equal(game.energy, energyBefore);
+  // ...but once it completes the sweep and sees the player, hyperspace fires
+  // (costing 3 energy) and the meanie reverts to a tree.
+  tickSeconds(game, 4);
+  assert.equal(game.energy, energyBefore - ENERGY.robot);
+  assert.equal(tree.type, 'tree');
 }
 
 function testAbsorbTargetsSquareTopObject() {

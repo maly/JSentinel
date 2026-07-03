@@ -12,8 +12,12 @@ const DISSOLVE_SECONDS = 1.2;
 // What a drained object degrades into (energy conservation: the lost unit
 // reappears as a tree the sentinel plants somewhere in its field of view).
 const DRAIN_CHAIN = Object.freeze({ robot: 'boulder', boulder: 'tree' });
-const MEANIE_TURN_RATE = Math.PI * 2;
-const MEANIE_FACE_TOLERANCE = Math.PI / 36;
+// The meanie sweeps toward the player slowly enough to give them a real
+// window to absorb it or break line of sight (it spawns facing away, so a
+// full sweep takes ~3 s). It only forces hyperspace once it actually SEES
+// the player's head — facing alone is not enough.
+const MEANIE_TURN_RATE = Math.PI / 3;
+const MEANIE_FACE_TOLERANCE = Math.PI / 12;
 
 const EYE_HEIGHT = Object.freeze({
   tree: 1.15,
@@ -309,7 +313,8 @@ export class Game {
       const turn = Math.sign(delta) * Math.min(Math.abs(delta), MEANIE_TURN_RATE * dt);
       meanie.facing = current + turn;
 
-      if (Math.abs(shortestAngleDelta(meanie.facing, desired)) <= MEANIE_FACE_TOLERANCE) {
+      if (Math.abs(shortestAngleDelta(meanie.facing, desired)) <= MEANIE_FACE_TOLERANCE
+        && this.world.canSee(this._objectEye(meanie), playerPoint)) {
         meanie.type = 'tree';
         meanie.energy = ENERGY.tree;
         meanie.height = undefined;
@@ -375,7 +380,9 @@ export class Game {
     if (!nearest) return;
     nearest.type = 'meanie';
     nearest.energy = ENERGY.meanie;
-    nearest.facing = nearest.facing ?? 0;
+    // Spawn facing directly AWAY from the player: the sweep toward them is
+    // the reaction window the original gives you.
+    nearest.facing = angleTo(centerOf(nearest), player) + Math.PI;
     this._message('Tree became a meanie');
   }
 
