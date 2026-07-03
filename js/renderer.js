@@ -313,23 +313,68 @@ function boulderMesh() {
   return octaPrismFaces(0, BOULDER_H, 0.44, 0.36, COL.boulder);
 }
 
-// Humanoid — total height exactly 2.0 world units (= 2 * BOULDER_H), matching
-// the original Sentinel robot proportions. Segments: legs 0.0..0.7 (0.7),
-// torso 0.7..1.6 (0.9), head 1.6..2.0 (0.4); arms run alongside the torso.
-// Every part keeps half-width <= 0.27 so the body fits the LOS cylinder
-// (world.js uses radius 0.32).
+// Watertight tapered SQUARE prism built with the SAME proven winding as
+// octaPrismFaces (side bot[i]->bot[j]->top[j]->top[i], top cap [...top], bottom
+// cap [...bot].reverse()). seg=4 with a 45° angular offset places one flat wall
+// squarely on +Z (forward) and axis-aligned edges. `wb`/`wt` are HALF-WIDTHS
+// (edge-to-center), converted to the ring circumradius via *sqrt(2). Reusing the
+// boulder's ground-truth winding keeps every wall + both caps facing outward.
+function squarePrism(y0, y1, wb, wt, col) {
+  const seg = 4;
+  const off = Math.PI / 4; // 45°: flat faces front the axes, one faces +Z
+  const rb = wb * Math.SQRT2, rt = wt * Math.SQRT2;
+  const ring = (y, r) => Array.from({ length: seg }, (_, i) => {
+    const a = off + (i / seg) * Math.PI * 2;
+    return [Math.cos(a) * r, y, Math.sin(a) * r];
+  });
+  const bot = ring(y0, rb);
+  const top = ring(y1, rt);
+  const faces = [];
+  for (let i = 0; i < seg; i++) {
+    const j = (i + 1) % seg;
+    faces.push({ v: [bot[i], bot[j], top[j], top[i]], c: col }); // side, CCW out
+  }
+  faces.push({ v: [...top], c: col });           // top cap, +Y normal
+  faces.push({ v: [...bot].reverse(), c: col });  // bottom cap, -Y normal
+  return faces;
+}
+
+// Deformed-box hexahedron: 8 vertices in the SAME index layout as boxFaces
+// (p0..p3 the z0 quad, p4..p7 the z1 quad), so the proven boxFaces winding gives
+// outward normals for any convex deformation. Used for the sentinel's hooked
+// beak where the +Z (z1) quad juts forward and droops. `cols` picks a per-face
+// colour: {front(-Z), back(+Z), left(-X), right(+X), top(+Y), bottom(-Y)}.
+function hexFaces(p, cols) {
+  const f = (a, b, c, d, col) => ({ v: [p[a], p[b], p[c], p[d]], c: col });
+  return [
+    f(0, 3, 2, 1, cols.front),  // -Z
+    f(5, 6, 7, 4, cols.back),   // +Z
+    f(4, 7, 3, 0, cols.left),   // -X
+    f(1, 2, 6, 5, cols.right),  // +X
+    f(3, 7, 6, 2, cols.top),    // +Y
+    f(4, 0, 1, 5, cols.bottom), // -Y
+  ];
+}
+
+// Humanoid — total height exactly 2.0 world units (= 2 * BOULDER_H). Restyled to
+// match ref-robot.png, top to bottom: (a) trapezoid "lampshade" head, wider at
+// top, floating above a small gap; (b) broad shoulder slab spanning wide like
+// shallow angled wings (wide in X, shallow in Z); (c) chest as a downward-
+// pointing tapering wedge (inverted triangle) narrowing to the waist; (d) lower
+// body = one column flaring slightly toward the ground (no separate legs). Every
+// part keeps half-width <= 0.30 so it stays inside the LOS cylinder. All solid
+// parts are watertight (squarePrism caps + boxFaces are closed).
 function humanoidMesh(bodyCol) {
   const faces = [];
-  // legs (two boxes, 0.0..0.7)
-  faces.push(...boxFaces(-0.13, 0.35, 0, 0.08, 0.35, 0.09, bodyCol));
-  faces.push(...boxFaces(0.13, 0.35, 0, 0.08, 0.35, 0.09, bodyCol));
-  // torso (0.7..1.6)
-  faces.push(...boxFaces(0, 1.15, 0, 0.20, 0.45, 0.14, bodyCol));
-  // arms (alongside torso; outer edge at x = 0.27)
-  faces.push(...boxFaces(-0.22, 1.15, 0, 0.05, 0.32, 0.06, bodyCol));
-  faces.push(...boxFaces(0.22, 1.15, 0, 0.05, 0.32, 0.06, bodyCol));
-  // head (1.6..2.0)
-  faces.push(...boxFaces(0, 1.80, 0, 0.15, 0.20, 0.14, bodyCol));
+  // (d) lower column: single column, flares slightly toward the ground (0.0..0.9)
+  faces.push(...squarePrism(0.0, 0.9, 0.20, 0.13, bodyCol));
+  // (c) chest wedge: narrow waist -> wide shoulders, inverted triangle (0.9..1.5)
+  faces.push(...squarePrism(0.9, 1.5, 0.13, 0.28, bodyCol));
+  // (b) broad shoulder slab: wide in X (0.30) like shallow wings, shallow in Z
+  faces.push(...boxFaces(0, 1.575, 0, 0.30, 0.075, 0.16, bodyCol));
+  // gap (1.65..1.72): the head floats above the shoulders
+  // (a) trapezoid "lampshade" head: wider at top than bottom (1.72..2.0)
+  faces.push(...squarePrism(1.72, 2.0, 0.12, 0.20, bodyCol));
   return faces;
 }
 
@@ -337,50 +382,69 @@ function robotMesh() { return humanoidMesh(COL.robot); }
 
 function meanieMesh() {
   const faces = humanoidMesh(COL.meanie);
-  // "wings" — two angled quads off the shoulders (scaled to the 2.0 body).
+  // "wings" — two angled quads off the broad shoulders (kept, per spec).
   const wing = COL.meanie;
-  faces.push({ v: [[0.20, 1.55, 0], [0.52, 1.86, 0], [0.52, 1.66, 0], [0.20, 1.32, 0]], c: wing });
-  faces.push({ v: [[-0.20, 1.32, 0], [-0.52, 1.66, 0], [-0.52, 1.86, 0], [-0.20, 1.55, 0]], c: wing });
+  faces.push({ v: [[0.28, 1.62, 0], [0.60, 1.80, 0], [0.60, 1.52, 0], [0.28, 1.40, 0]], c: wing });
+  faces.push({ v: [[-0.28, 1.40, 0], [-0.60, 1.52, 0], [-0.60, 1.80, 0], [-0.28, 1.62, 0]], c: wing });
   return faces;
 }
 
-// Sentinel — distinct robed silhouette, ~2.2 tall so it reads a touch taller
-// than the 2.0 robots (and taller still on its pedestal).
+// Sentinel — restyled to match ref-sentinel.png: a slim robe column tapering
+// UPWARD (base ~0.26 half-width) topped by the iconic head whose crown bends
+// forward into a hooked BEAK. The beak points in the facing direction (+Z local
+// = forward; verified: math3d yaw 0 looks +Z, game angleTo = atan2(dx,dz), and a
+// local +Z vector maps unchanged to the world facing direction at yaw 0). It
+// replaces the old face-plate as the facing indicator: it juts ~0.3 forward,
+// droops slightly, and carries a dark eye (tip front) and dark underside so the
+// direction reads at distance. ~2.2 tall. Pale palette. Everything is a
+// watertight solid (squarePrism caps, boxFaces, and the closed beak hexahedron).
 function sentinelMesh() {
   const faces = [];
-  // Robe: tall tapered column, wide at the base (0.0..1.45).
-  faces.push(...taperedFaces(0, 1.45, 0.32, 0.20, COL.sentinel));
-  // Shoulders / hood block (1.45..1.80)
-  faces.push(...boxFaces(0, 1.63, 0, 0.24, 0.18, 0.20, COL.sentinelHood));
-  // Head peeking from hood (1.82..2.18)
-  faces.push(...boxFaces(0, 2.00, 0, 0.12, 0.18, 0.12, COL.sentinel));
-  // Directional face on the +Z (forward) hood side so the sentinel's facing
-  // reads at a glance — critical because o.facing drives its vision cone. +Z is
-  // forward: math3d yaw 0 looks +Z and game angleTo = atan2(dx,dz), and a local
-  // +Z vector maps unchanged to the world facing direction at yaw 0. High
-  // contrast (dark navy / near-black on the pale robe) so it reads at 20 tiles.
-  // Quads face +Z (winding [xl,yb]->[xl,yt]->[xr,yt]->[xr,yb]); they are culled
-  // from every other side, so the dark face only shows when you face the front.
-  const FACE_DARK = [0x16, 0x18, 0x2E]; // dark navy recessed plate
-  const EYE_DARK = [0x06, 0x07, 0x12];  // near-black eye slit
-  const fq = (z, xl, xr, yb, yt, c) => ({ v: [[xl, yb, z], [xl, yt, z], [xr, yt, z], [xr, yb, z]], c });
-  faces.push(fq(0.215, -0.17, 0.17, 1.50, 1.76, FACE_DARK)); // recessed face plate
-  faces.push(fq(0.225, -0.14, 0.14, 1.58, 1.66, EYE_DARK));  // single large eye slit
-  // Forward-jutting visor/brow (solid box) so the facing also reads in profile.
-  faces.push(...boxFaces(0, 1.74, 0.27, 0.16, 0.025, 0.07, FACE_DARK));
+  const FACE_DARK = [0x16, 0x18, 0x2E]; // dark navy
+  const EYE_DARK = [0x06, 0x07, 0x12];  // near-black
+  // Slim robe column, tapering upward (0.0..1.75).
+  faces.push(...squarePrism(0, 1.75, 0.26, 0.16, COL.sentinel));
+  // Small shoulder / wing bump.
+  faces.push(...boxFaces(0, 1.66, 0, 0.22, 0.06, 0.14, COL.sentinelHood));
+  // Head block (1.81..2.11).
+  faces.push(...boxFaces(0, 1.96, 0, 0.15, 0.15, 0.15, COL.sentinelHood));
+  // Hooked beak: a deformed box whose +Z (forward) quad juts to z=0.46 and droops
+  // (tip lower than the root), so the crown appears to bend forward. Root quad
+  // (z=0.12) is buried in the head; tip front quad = dark "eye"; underside dark.
+  const beak = [
+    [-0.10, 1.92, 0.12], // p0  root, z0
+    [ 0.10, 1.92, 0.12], // p1
+    [ 0.10, 2.18, 0.12], // p2
+    [-0.10, 2.18, 0.12], // p3
+    [-0.05, 1.84, 0.46], // p4  tip, z1
+    [ 0.05, 1.84, 0.46], // p5
+    [ 0.05, 2.00, 0.46], // p6
+    [-0.05, 2.00, 0.46], // p7
+  ];
+  faces.push(...hexFaces(beak, {
+    front: COL.sentinel,     // -Z root (hidden inside the head)
+    back: EYE_DARK,          // +Z tip front — dark eye, reads as the facing
+    left: COL.sentinelHood,
+    right: COL.sentinelHood,
+    top: COL.sentinel,
+    bottom: FACE_DARK,       // dark drooping underside
+  }));
   return faces;
 }
 
 function pedestalMesh() {
   // Total height exactly 1.0 to match world.js OBJECT_HEIGHT.pedestal, so the
-  // sentinel stacked at pedestal-top (base + 1.0) reads as standing ON it.
-  // Tapered column (0..0.85) capped by a wider plate (0.85..1.0).
-  const column = taperedFaces(0, 0.85, 0.34, 0.22, COL.pedestal);
-  const cap = taperedFaces(0.85, 1.0, 0.30, 0.30, COL.pedestal);
-  return column.concat(cap);
+  // sentinel stacked at pedestal-top (base + 1.0) reads as standing ON it. The
+  // original pedestal is a tall tapered block: model it as a two-tier truncated
+  // pyramid using the proven squarePrism winding, so every wall + both caps of
+  // each tier face outward and it stays watertight from below (it sits on the
+  // summit and is usually seen from underneath).
+  const lower = squarePrism(0, 0.55, 0.48, 0.38, COL.pedestal);  // wide base tier
+  const upper = squarePrism(0.55, 1.0, 0.34, 0.28, COL.pedestal); // narrower top tier
+  return lower.concat(upper);
 }
 
-const MESHES = {
+export const MESHES = {
   tree: treeMesh(),
   boulder: boulderMesh(),
   robot: robotMesh(),
