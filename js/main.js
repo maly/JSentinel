@@ -13,7 +13,7 @@ const LOGIC_HZ = 10;
 const YAW_SPEED = 1.2;        // rad/s
 const YAW_SPEED_FAST = 3.0;
 const PITCH_LIMIT = Math.PI / 3;
-const TREE_DENSITY = 0.3;     // trees on ~30% of free flat tiles
+const TREE_DENSITY = 0.25;    // trees on ~25% of free flat tiles
 const BOULDER_COUNT = 2;
 const START_ENERGY = 10;
 
@@ -86,7 +86,7 @@ function setupLevel(w, rng) {
   pool.sort((a, b) => dist2(b) - dist2(a));
   const start = pickRandom(pool.slice(0, Math.max(1, Math.floor(pool.length / 10))), rng);
 
-  // Scatter trees over ~30% of the free flat tiles, plus a couple of boulders.
+  // Scatter trees over ~25% of the free flat tiles, plus a couple of boulders.
   const free = () => flats.filter(
     (t) => w.objectsAt(t.x, t.z).length === 0 && !(t.x === start.x && t.z === start.z),
   );
