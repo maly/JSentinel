@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>THE SENTINEL</title>
+<style>
+  :root {
+    --scale: 1.75;
+    --game-w: 512px;
+    --game-h: 384px;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: "Courier New", Courier, monospace;
+    color: #9fffb0;
+    user-select: none;
+  }
+
+  #stage {
+    position: relative;
+    width: calc(var(--game-w) * var(--scale));
+    height: calc(var(--game-h) * var(--scale));
+    box-shadow: 0 0 0 2px #274a2c, 0 0 40px rgba(80, 255, 120, 0.15);
+    background: #000;
+  }
+
+  #screen {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+    background: #000;
+  }
+
+  /* subtle scanline overlay for retro CRT feel */
+  #stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0, 0, 0, 0) 0px,
+      rgba(0, 0, 0, 0) 2px,
+      rgba(0, 0, 0, 0.08) 3px
+    );
+    mix-blend-mode: multiply;
+    opacity: 0.5;
+  }
+
+  #overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    font-family: "Courier New", Courier, monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  footer {
+    margin-top: 18px;
+    max-width: calc(var(--game-w) * var(--scale));
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #4f8a5a;
+    letter-spacing: 0.04em;
+  }
+
+  footer .key {
+    display: inline-block;
+    padding: 1px 6px;
+    margin: 0 2px;
+    border: 1px solid #3a6a42;
+    border-radius: 3px;
+    color: #bdf5c4;
+    background: #0c1a0e;
+  }
+
+  footer .sep {
+    color: #24401f;
+    margin: 0 10px;
+  }
+
+  h1.title-mark {
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+  <div id="stage">
+    <canvas id="screen" width="512" height="384"></canvas>
+    <div id="overlay"></div>
+  </div>
+
+  <footer>
+    <span class="key">WASD</span><span class="key">&uarr;&darr;&larr;&rarr;</span> LOOK
+    <span class="key">MOUSE</span> AIM
+    <span class="sep">|</span>
+    <span class="key">SHIFT</span> FAST
+    <span class="sep">|</span>
+    <span class="key">SPACE</span><span class="key">LMB</span> ABSORB
+    <span class="key">T</span> TREE
+    <span class="key">B</span> BOULDER
+    <span class="key">R</span> ROBOT
+    <br>
+    <span class="key">Q</span> TRANSFER
+    <span class="key">H</span> HYPERSPACE
+    <span class="key">U</span> U-TURN
+    <span class="sep">|</span>
+    <span class="key">ENTER</span> START / RESTART
+  </footer>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

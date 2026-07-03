@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Sentinel — Renderer Test Harness</title>
+<style>
+  html, body { margin: 0; background: #111; color: #cfc; font-family: monospace; }
+  #wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; }
+  canvas { image-rendering: pixelated; border: 1px solid #333; width: 1024px; height: 768px; }
+  #hud { font-size: 12px; line-height: 1.4; text-align: center; }
+  b { color: #8f8; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="512" height="384"></canvas>
+  <div id="hud">
+    <div>Arrows = look (yaw/pitch) · WASD = move · Q/E = up/down · X = toggle crosshair</div>
+    <div id="stat"></div>
+  </div>
+</div>
+
+<script type="module">
+import { generateTerrain, MAP_SIZE, MAX_HEIGHT } from './js/terrain.js';
+import { render, BOULDER_H } from './js/renderer.js';
+import { HEIGHT_SCALE } from './js/math3d.js';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const stat = document.getElementById('stat');
+
+// --- Build terrain (seed 1) ---------------------------------------------
+const tiles = generateTerrain(1);
+
+// Center terrain height (corner-height units) of a tile.
+function centerH(x, z) {
+  const t = tiles[z][x];
+  return (t.h[0] + t.h[1] + t.h[2] + t.h[3]) / 4;
+}
+
+// --- Minimal fake world conforming to the renderer's expectations --------
+const world = {
+  tiles,
+  objects: [],
+  // Top surface world-Y of a tile (no live stacks in this harness).
+  surfaceY(x, z) { return centerH(x, z) * HEIGHT_SCALE; },
+};
+
+// Find flat tiles to place objects on.
+const flats = [];
+let summit = null, summitH = -1;
+for (let z = 0; z < MAP_SIZE; z++) {
+  for (let x = 0; x < MAP_SIZE; x++) {
+    const t = tiles[z][x];
+    if (t.flat) {
+      flats.push({ x, z, h: t.height });
+      if (t.height > summitH) { summitH = t.height; summit = { x, z }; }
+    }
+  }
+}
+// low flat tiles for scattering test objects
+const lowFlats = flats.filter(f => f.h <= 2);
+
+function place(type, tile, stackIndex = 0, rotY = 0) {
+  world.objects.push({ type, x: tile.x, z: tile.z, stackIndex, rotY, id: type });
+}
+
+// One of each object type on flat tiles.
+const pick = (i) => lowFlats[(i * 7) % lowFlats.length] || flats[i % flats.length];
+place('tree', pick(0), 0, 0);
+place('boulder', pick(1), 0, 0);
+place('robot', pick(2), 0, 0.6);
+place('meanie', pick(3), 0, 2.0);
+place('pedestal', summit, 0, 0);
+// Sentinel stands on top of the pedestal (stackIndex 1 => +BOULDER_H isn't
+// right for a pedestal, so place it directly and lift via surfaceY override).
+world.objects.push({ type: 'sentinel', x: summit.x, z: summit.z, stackIndex: 0, rotY: 0.8, id: 'sentinel', onPedestal: true });
+
+// surfaceY override so the sentinel sits on top of the pedestal mesh (1.0 tall).
+const baseSurfaceY = world.surfaceY;
+world.surfaceY = (x, z) => {
+  if (summit && x === summit.x && z === summit.z) {
+    // pedestal occupies this tile; sentinel rides its top.
+    return baseSurfaceY(x, z) + 1.0;
+  }
+  return baseSurfaceY(x, z);
+};
+
+// --- Camera --------------------------------------------------------------
+const start = lowFlats[0] || flats[0];
+const camera = {
+  x: start.x + 0.5,
+  y: baseSurfaceY(start.x, start.z) + 0.6,
+  z: start.z + 0.5,
+  yaw: 0,
+  pitch: 0,
+};
+// Aim roughly toward the summit for a good initial view.
+if (summit) {
+  camera.yaw = Math.atan2((summit.x + 0.5) - camera.x, (summit.z + 0.5) - camera.z);
+}
+
+const uiState = { crosshair: true };
+
+// Debug hooks (harness only) — lets you inspect/drive from the console.
+window.__cam = camera;
+window.__world = world;
+
+// --- Input ---------------------------------------------------------------
+const keys = {};
+addEventListener('keydown', (e) => {
+  keys[e.key.toLowerCase()] = true;
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) e.preventDefault();
+  if (e.key.toLowerCase() === 'x') uiState.crosshair = !uiState.crosshair;
+});
+addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+function groundY(x, z) {
+  const ix = Math.max(0, Math.min(MAP_SIZE - 1, Math.floor(x)));
+  const iz = Math.max(0, Math.min(MAP_SIZE - 1, Math.floor(z)));
+  return centerH(ix, iz) * HEIGHT_SCALE + 0.6;
+}
+
+function update(dt) {
+  const rot = (keys['shift'] ? 2.2 : 1.1) * dt;
+  if (keys['arrowleft']) camera.yaw -= rot;
+  if (keys['arrowright']) camera.yaw += rot;
+  if (keys['arrowup']) camera.pitch = Math.min(Math.PI / 3, camera.pitch + rot);
+  if (keys['arrowdown']) camera.pitch = Math.max(-Math.PI / 3, camera.pitch - rot);
+
+  const spd = 4 * dt;
+  const fx = Math.sin(camera.yaw), fz = Math.cos(camera.yaw);
+  const rx = Math.cos(camera.yaw), rz = -Math.sin(camera.yaw);
+  if (keys['w']) { camera.x += fx * spd; camera.z += fz * spd; }
+  if (keys['s']) { camera.x -= fx * spd; camera.z -= fz * spd; }
+  if (keys['a']) { camera.x -= rx * spd; camera.z -= rz * spd; }
+  if (keys['d']) { camera.x += rx * spd; camera.z += rz * spd; }
+  if (keys['q']) camera.y += spd;
+  if (keys['e']) camera.y -= spd;
+
+  camera.x = Math.max(0.1, Math.min(MAP_SIZE - 0.1, camera.x));
+  camera.z = Math.max(0.1, Math.min(MAP_SIZE - 0.1, camera.z));
+  // keep eye a bit above local ground unless lifted with Q
+  const minY = groundY(camera.x, camera.z);
+  if (camera.y < minY) camera.y = minY;
+}
+
+let last = performance.now();
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  update(dt);
+  render(ctx, world, camera, uiState);
+  stat.innerHTML = `cam <b>(${camera.x.toFixed(1)}, ${camera.y.toFixed(1)}, ${camera.z.toFixed(1)})</b> ` +
+    `yaw <b>${(camera.yaw * 180 / Math.PI % 360).toFixed(0)}°</b> pitch <b>${(camera.pitch * 180 / Math.PI).toFixed(0)}°</b> · ` +
+    `flat tiles <b>${flats.length}</b> · low flats <b>${lowFlats.length}</b> · summit h <b>${summitH}</b> (max ${MAX_HEIGHT}) · objs <b>${world.objects.length}</b>`;
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

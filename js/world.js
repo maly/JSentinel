@@ -1,0 +1,278 @@
+export const ENERGY = Object.freeze({
+  tree: 1,
+  boulder: 2,
+  robot: 3,
+  meanie: 1,
+  sentinel: 4,
+});
+
+// Single source of truth for the world-Y scale lives in math3d.js.
+import { HEIGHT_SCALE } from './math3d.js';
+export { HEIGHT_SCALE };
+
+const EPSILON = 1e-6;
+const DEFAULT_RADIUS = 0.34;
+
+const OBJECT_HEIGHT = Object.freeze({
+  tree: 3.0,    // tall pines, as in the original
+  boulder: 1.0,
+  robot: 2.0,   // original proportions: a robot is two boulders tall
+  meanie: 1.35,
+  sentinel: 2.2,
+  pedestal: 1.0,
+});
+
+const OBJECT_RADIUS = Object.freeze({
+  tree: 0.28,
+  boulder: 0.38,
+  robot: 0.32,
+  meanie: 0.30,
+  sentinel: 0.42,
+  pedestal: 0.45,
+});
+
+// Stack bases: objects that other things may rest on top of.
+const STACKABLE_BASE = new Set(['boulder', 'pedestal']);
+
+function tileHeight(tile) {
+  if (!tile) return 0;
+  if (typeof tile.height === 'number') return tile.height;
+  if (Array.isArray(tile.h) && tile.h.length) {
+    return tile.h.reduce((sum, value) => sum + value, 0) / tile.h.length;
+  }
+  return 0;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function length3(vector) {
+  return Math.hypot(vector.x, vector.y, vector.z);
+}
+
+function normalize3(vector) {
+  const length = length3(vector);
+  if (length <= EPSILON) return { x: 0, y: 0, z: 0 };
+  return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
+}
+
+function objectHeight(object) {
+  return object.height ?? OBJECT_HEIGHT[object.type] ?? 1.0;
+}
+
+function objectRadius(object) {
+  return object.radius ?? OBJECT_RADIUS[object.type] ?? DEFAULT_RADIUS;
+}
+
+function objectCenter(object) {
+  return { x: object.x + 0.5, z: object.z + 0.5 };
+}
+
+export class World {
+  constructor(tiles) {
+    if (!Array.isArray(tiles) || tiles.length === 0 || !Array.isArray(tiles[0])) {
+      throw new Error('World requires a non-empty 2D tile array');
+    }
+    this.tiles = tiles;
+    this.depth = tiles.length;
+    this.width = tiles[0].length;
+    this.objects = [];
+    // Visual-only ghosts of absorbed objects (dissolve 1 -> 0); the renderer
+    // draws them, nothing else ever consults them.
+    this.effects = [];
+    this._nextObjectId = 1;
+  }
+
+  objectsAt(x, z) {
+    return this.objects
+      .filter((object) => object.x === x && object.z === z)
+      .sort((a, b) => (a.y ?? 0) - (b.y ?? 0));
+  }
+
+  surfaceY(x, z) {
+    const tile = this._tileAt(x, z);
+    return tileHeight(tile) * HEIGHT_SCALE;
+  }
+
+  terrainYAt(worldX, worldZ) {
+    const tileX = clamp(Math.floor(worldX), 0, this.width - 1);
+    const tileZ = clamp(Math.floor(worldZ), 0, this.depth - 1);
+    const tile = this.tiles[tileZ][tileX];
+    const h = Array.isArray(tile.h) && tile.h.length >= 4
+      ? tile.h
+      : [tileHeight(tile), tileHeight(tile), tileHeight(tile), tileHeight(tile)];
+    const u = clamp(worldX - tileX, 0, 1);
+    const v = clamp(worldZ - tileZ, 0, 1);
+    // Triangle interpolation along the h00-h11 diagonal — MUST match how the
+    // renderer triangulates non-planar tiles, so that the pick ray and the
+    // picture agree (bilinear sampling bulges where the screen shows a plane).
+    // Corners: h[0]=h00(x0,z0) h[1]=h10(x1,z0) h[2]=h11(x1,z1) h[3]=h01(x0,z1)
+    let y;
+    if (u >= v) {
+      y = h[0] + (h[1] - h[0]) * u + (h[2] - h[1]) * v; // triangle 00-10-11
+    } else {
+      y = h[0] + (h[2] - h[3]) * u + (h[3] - h[0]) * v; // triangle 00-11-01
+    }
+    return y * HEIGHT_SCALE;
+  }
+
+  topAt(x, z) {
+    const stack = this.objectsAt(x, z);
+    if (stack.length === 0) return this.surfaceY(x, z);
+    const top = stack[stack.length - 1];
+    return (top.y ?? this.surfaceY(x, z)) + objectHeight(top);
+  }
+
+  addObject(object) {
+    if (!object || !object.type) return null;
+    const candidate = { ...object };
+    if (!this.canPlace(candidate.type, candidate.x, candidate.z)) return null;
+    candidate.id ??= this._nextObjectId++;
+    candidate.energy ??= ENERGY[candidate.type] ?? 1;
+    candidate.y = this.restingY(candidate.type, candidate.x, candidate.z);
+    candidate.height ??= objectHeight(candidate);
+    candidate.radius ??= objectRadius(candidate);
+    this.objects.push(candidate);
+    return candidate;
+  }
+
+  removeObject(object) {
+    const index = this.objects.indexOf(object);
+    if (index === -1) return false;
+    this.objects.splice(index, 1);
+    return true;
+  }
+
+  canPlace(type, x, z) {
+    if (!this._inBounds(x, z)) return false;
+    const stack = this.objectsAt(x, z);
+    const top = stack[stack.length - 1] ?? null;
+    // Bare ground: objects may only rest on flat tiles (never on slopes).
+    if (!top) {
+      const tile = this._tileAt(x, z);
+      return Boolean(tile && tile.flat);
+    }
+    if (type === 'boulder') return top.type === 'boulder';
+    if (type === 'tree' || type === 'robot' || type === 'sentinel' || type === 'meanie') {
+      return STACKABLE_BASE.has(top.type);
+    }
+    return false;
+  }
+
+  restingY(type, x, z) {
+    const stack = this.objectsAt(x, z);
+    if (stack.length === 0) return this.surfaceY(x, z);
+    const top = stack[stack.length - 1];
+    if (STACKABLE_BASE.has(top.type)) return (top.y ?? 0) + objectHeight(top);
+    return this.surfaceY(x, z);
+  }
+
+  isTopObject(object) {
+    const stack = this.objectsAt(object.x, object.z);
+    return stack[stack.length - 1] === object;
+  }
+
+  canSee(eye, target) {
+    const start = this._point(eye);
+    const end = this._point(target);
+    const delta = { x: end.x - start.x, y: end.y - start.y, z: end.z - start.z };
+    const distance = length3(delta);
+    if (distance <= EPSILON) return true;
+    const steps = Math.max(8, Math.ceil(distance * 18));
+
+    for (let step = 1; step < steps; step += 1) {
+      const t = step / steps;
+      const point = {
+        x: start.x + delta.x * t,
+        y: start.y + delta.y * t,
+        z: start.z + delta.z * t,
+      };
+
+      if (this.terrainYAt(point.x, point.z) >= point.y - 0.02) return false;
+
+      for (const object of this.objects) {
+        if (this._pointInsideObject(start, object) || this._pointInsideObject(end, object)) continue;
+        if (this._pointInsideObject(point, object)) return false;
+      }
+    }
+
+    return true;
+  }
+
+  pickTarget(rayOrigin, rayDir) {
+    const origin = this._point(rayOrigin);
+    const direction = normalize3(rayDir);
+    if (length3(direction) <= EPSILON) return null;
+
+    const maxDistance = 80;
+    const stepSize = 0.05;
+    for (let distance = stepSize; distance <= maxDistance; distance += stepSize) {
+      const point = {
+        x: origin.x + direction.x * distance,
+        y: origin.y + direction.y * distance,
+        z: origin.z + direction.z * distance,
+      };
+
+      for (const object of this.objects) {
+        if (this._pointInsideObject(origin, object)) continue;
+        if (this._pointInsideObject(point, object)) {
+          return {
+            tile: { x: object.x, z: object.z },
+            object,
+            point,
+          };
+        }
+      }
+
+      if (!this._worldPointInBounds(point.x, point.z)) continue;
+      const terrainY = this.terrainYAt(point.x, point.z);
+      if (point.y <= terrainY + 0.02) {
+        return {
+          tile: {
+            x: clamp(Math.floor(point.x), 0, this.width - 1),
+            z: clamp(Math.floor(point.z), 0, this.depth - 1),
+          },
+          object: null,
+          point: { x: point.x, y: terrainY, z: point.z },
+        };
+      }
+    }
+
+    return null;
+  }
+
+  _tileAt(x, z) {
+    if (!this._inBounds(x, z)) return null;
+    return this.tiles[z][x];
+  }
+
+  _inBounds(x, z) {
+    return Number.isInteger(x) && Number.isInteger(z) && x >= 0 && z >= 0 && x < this.width && z < this.depth;
+  }
+
+  _worldPointInBounds(x, z) {
+    return x >= 0 && z >= 0 && x <= this.width && z <= this.depth;
+  }
+
+  _point(point) {
+    return {
+      x: point.x,
+      y: point.y ?? point.eyeY ?? 0,
+      z: point.z,
+    };
+  }
+
+  _pointInsideObject(point, object) {
+    const center = objectCenter(object);
+    const radius = objectRadius(object);
+    const y = object.y ?? this.surfaceY(object.x, object.z);
+    const dx = point.x - center.x;
+    const dz = point.z - center.z;
+    return dx * dx + dz * dz <= radius * radius
+      && point.y >= y - 0.02
+      && point.y <= y + objectHeight(object) + 0.02;
+  }
+}
+
+export default World;
