@@ -444,12 +444,33 @@ function pedestalMesh() {
   return lower.concat(upper);
 }
 
+// Uniformly scale a face list about the local origin (base center). Returns a
+// fresh deep-copied mesh — vertices multiplied per-axis, colours/flags carried
+// through untouched. Used to derive the smaller SENTRY from the sentinel geometry
+// (keeps the forward beak / dark eye as the +Z facing indicator).
+function scaleFaces(faces, sx, sy, sz) {
+  return faces.map((f) => ({
+    ...f,
+    v: f.v.map(([x, y, z]) => [x * sx, y * sy, z * sz]),
+  }));
+}
+
+// Sentry — a smaller sentinel. The sentinel tops out at y=2.18 (beak tip); scale
+// Y so total height is exactly 2.0 (robot height) and XZ by 0.85 so it reads as
+// slimmer. Geometry (incl. the hooked +Z beak with its dark eye) is preserved, so
+// it still faces +Z. Bounds: max|x|~0.221, max|z|~0.391, y in [0,2.0].
+function sentryMesh() {
+  const SENTINEL_TOP = 2.18;
+  return scaleFaces(sentinelMesh(), 0.85, 2.0 / SENTINEL_TOP, 0.85);
+}
+
 export const MESHES = {
   tree: treeMesh(),
   boulder: boulderMesh(),
   robot: robotMesh(),
   meanie: meanieMesh(),
   sentinel: sentinelMesh(),
+  sentry: sentryMesh(),
   pedestal: pedestalMesh(),
 };
 

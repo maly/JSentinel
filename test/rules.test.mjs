@@ -82,7 +82,9 @@ function testStackingRules() {
 }
 
 function testLineOfSightTerrainRidge() {
-  const world = new World(makeTiles(8, 8, (x, z) => (x === 3 && z === 1 ? 2 : 0)));
+  // HEIGHT_SCALE is 0.25 (32 levels): ridge level 4 -> world Y 1.0 blocks an
+  // eye ray at Y 1.0.
+  const world = new World(makeTiles(8, 8, (x, z) => (x === 3 && z === 1 ? 4 : 0)));
   assert.equal(
     world.canSee({ x: 1.5, y: 1, z: 1.5 }, { x: 6.5, y: 1, z: 1.5 }),
     false,
@@ -139,9 +141,9 @@ function testBoulderDrainsToTree() {
 }
 
 function testMeanieTriggerWhenHeadVisibleBaseHidden() {
-  // HEIGHT_SCALE is 0.5: ridge height 3 -> world Y 1.5, which hides the
+  // HEIGHT_SCALE is 0.25: ridge level 6 -> world Y 1.5, which hides the
   // player's base (ray dips to ~0.8-1.1) but not the head (ray stays ~1.7).
-  const world = new World(makeTiles(8, 8, (x, z) => (x === 3 && z === 0 ? 3 : 0)));
+  const world = new World(makeTiles(8, 8, (x, z) => (x === 3 && z === 0 ? 6 : 0)));
   world.addObject({ type: 'sentinel', x: 0, z: 0, facing: Math.PI / 2 });
   const tree = world.addObject({ type: 'tree', x: 6, z: 1 });
   const game = new Game(world, { x: 6, z: 0, energy: 10 });
@@ -179,6 +181,28 @@ function testAbsorbTargetsSquareTopObject() {
   assert.equal(world.objects.includes(boulder), true);
 }
 
+function testSentryActsAsWatcher() {
+  const world = new World(makeTiles());
+  // A sentry scans and drains exactly like the Sentinel.
+  world.addObject({ type: 'sentry', x: 0, z: 0, facing: Math.PI / 2 - Math.PI / 6 });
+  const boulder = world.addObject({ type: 'boulder', x: 2, z: 0 });
+  const game = new Game(world, { x: 0, z: 7, energy: 10 });
+
+  tickSeconds(game, 10.2);
+  assert.equal(world.objects.includes(boulder), false);
+  assert.equal(world.objectsAt(2, 0).at(-1).type, 'tree');
+}
+
+function testSentryAbsorbYieldsFour() {
+  const world = new World(makeTiles());
+  const game = new Game(world, { x: 0, z: 0, energy: 10 });
+  world.addObject({ type: 'sentry', x: 3, z: 3 });
+
+  assert.equal(game.doAction('absorb', { tile: { x: 3, z: 3 }, object: null, point: { x: 3.5, y: 0, z: 3.5 } }), true);
+  assert.equal(game.energy, 10 + ENERGY.sentry);
+  assert.equal(ENERGY.sentry, 4);
+}
+
 function testTransferOnlyIntoRobots() {
   const world = new World(makeTiles());
   const game = new Game(world, { x: 0, z: 0, energy: 10 });
@@ -213,6 +237,8 @@ testSentinelScanDrainChain();
 testBoulderDrainsToTree();
 testMeanieTriggerWhenHeadVisibleBaseHidden();
 testAbsorbTargetsSquareTopObject();
+testSentryActsAsWatcher();
+testSentryAbsorbYieldsFour();
 testTransferOnlyIntoRobots();
 testWinConditionSequence();
 

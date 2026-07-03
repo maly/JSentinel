@@ -1,37 +1,58 @@
-// terrain.js — seeded deterministic 32×32 Sentinel-style terrain.
-// deep-reasoner, Task 1 (rev 3: wavy, multi-plateau). Vanilla ES module, no deps.
+// terrain.js — seeded deterministic 31×31 Sentinel-style terrain.
+// deep-reasoner, Task 1 (rev 4: original 31-grid / 32-level fidelity). ES module.
 //
-// Model: a 33×33 grid of integer vertex heights (0..MAX_HEIGHT). Adjacent tiles
+// Model: a 32×32 grid of integer vertex heights (0..MAX_HEIGHT). Adjacent tiles
 // share corner vertices, so the surface is automatically continuous. A tile is
 // FLAT iff its 4 corner heights are all equal; otherwise it is a slope.
+//
+// ORIGINAL-GAME FIDELITY: the arcade Sentinel uses a 31×31 tile grid with 32
+// integer height LEVELS (0..31). We match that here. With HEIGHT_SCALE = 0.25
+// (math3d.js) the WORLD-SPACE character is unchanged from the old 8-level /
+// 0.5-scale build — level values are ~doubled, so the same wavy terraced look
+// now lives on a finer grid (old level 8 * 0.5 = 4.0 world == new level 16 *
+// 0.25). The general landscape uses most of levels 0..~20; the top levels are
+// reserved for the unique SUMMIT (highest used level ~24..31, seed-dependent).
 //
 // Look: a WAVY terraced landscape (like the original Sentinel) — independent
 // ridges, valleys and basins scattered across the whole map, NOT one big hill.
 // A multi-octave value-noise heightfield (with a dedicated ridge octave and
 // strong mid-frequency terms) is quantised to integer levels, its plateaus are
-// widened, and its worst steps are shaved so that no tile spans more than 3
-// units. Most steps are gentle (span 1–2); the occasional span-3 "wall" reads
-// as a cliff. The summit is a SMALL terraced cone blended in only near its own
-// footprint (via max()), so it is a local peak — it does not tilt the whole map.
+// widened, and its worst steps are shaved so that no ordinary tile spans more
+// than 4 levels. Most steps are gentle (2–4 levels ≈ 0.5–1.0 world); the
+// occasional bigger cliff reaches 6 levels (1.5 world — the same real-world cap
+// as the old span-3 / 0.5-scale build). The summit is a terraced cone blended
+// in only near its own footprint (via max()), so it is a local peak — it does
+// not tilt the whole map.
 //
-// generateTerrain(seed) -> tiles[32][32], indexed tiles[z][x], where
+// generateTerrain(seed) -> tiles[31][31], indexed tiles[z][x], where
 //   tile = { h: [h00, h10, h11, h01], flat: bool, height: int }
 //   h00 = corner at (x,   z)      h10 = corner at (x+1, z)
 //   h11 = corner at (x+1, z+1)    h01 = corner at (x,   z+1)
 //
 // Guarantees (verified over seeds 1..5):
 //   * one SINGLE highest plateau (unique max height) with >= 4 flat tiles,
-//   * >= 25 flat tiles across the lowest two levels,
+//   * >= 25 flat tiles across the lowest levels,
 //   * >= 55% of all tiles flat (mostly-walkable plateaus),
-//   * every tile spans <= 3 height units; no adjacent corner delta > 3,
-//     with span-3 "walls" occasional (a minority of slope transitions),
+//   * ordinary tiles span <= 4 levels; every tile (incl. summit) spans <= 6,
+//     so no adjacent corner delta > 6, with the big cliffs occasional,
 //   * shared corners between adjacent tiles (continuous surface),
 //   * NON-monotonic relief: local ridges/basins across the map, not one hill,
 //   * deterministic: same integer seed -> byte-identical tiles, every run.
 
-export const MAP_SIZE = 32;      // tiles per side
-export const MAX_HEIGHT = 8;     // highest plateau height (summit level)
-const VN = MAP_SIZE + 1;         // 33 vertices per side
+export const MAP_SIZE = 31;      // tiles per side (original 31×31 grid)
+export const MAX_HEIGHT = 31;    // highest possible level (32 levels: 0..31)
+const VN = MAP_SIZE + 1;         // 32 vertices per side
+const FIELD_MAX = 12;            // general (non-summit) ground tops out here
+const GEN_SPAN = 4;              // ordinary slope tiles span at most this
+const WALL_CAP = 6;              // hard cap incl. summit cliffs (1.5 world)
+// The general terrain is built at HALF resolution (a proven coarse pass that
+// reliably yields >=55% flat, like the old 8-level build) and then every level
+// is DOUBLED. Doubling preserves flat tiles exactly (equal corners stay equal)
+// and doubles every span, so the coarse span-2 slopes become the 4-level steps
+// and the coarse span-1 steps become the gentle 2-level steps of the final map.
+const COARSE_MAX = FIELD_MAX / 2; // coarse ground cap (7) -> doubled to 14
+const COARSE_SPAN = 2;            // coarse tile span cap -> doubled to GEN_SPAN(4)
+const COARSE_LIP = 2;             // coarse flatten lip (matches COARSE_SPAN)
 
 // Deterministic PRNG: mulberry32. Same seed -> same landscape, every run.
 function mulberry32(seed) {
@@ -223,9 +244,9 @@ export function generateTerrain(seed = 1) {
   f = blur(f, N);            // one light pass only — keep the waves
 
   // Normalise to [0,1], then a mild low-bias (gamma > 1 broadens the basins so
-  // the lowest levels stay walkable), then map to 0..FIELD_MAX. The summit level
-  // (8) is NOT produced here — free ground tops out at FIELD_MAX so the summit
-  // cone in step 2 owns the unique maximum.
+  // the lowest levels stay walkable), then map to 0..FIELD_MAX. The reserved
+  // summit levels (> FIELD_MAX) are NOT produced here — free ground tops out at
+  // FIELD_MAX so the summit cone in step 2 owns the unique maximum.
   let mn = Infinity, mx = -Infinity;
   let pz = 0, px = 0;             // location of the global maximum (summit seed)
   for (let z = 0; z < N; z++) {
@@ -237,60 +258,102 @@ export function generateTerrain(seed = 1) {
   }
   const span = (mx - mn) || 1;
   const gamma = 1.42;
-  const FIELD_MAX = MAX_HEIGHT - 1;                 // free ground tops out at 7
   const V = Array.from({ length: N }, () => new Array(N).fill(0));
   for (let z = 0; z < N; z++) {
     for (let x = 0; x < N; x++) {
       const norm = (f[z][x] - mn) / span;               // 0..1
       const shaped = Math.pow(norm, gamma);             // bias low
-      V[z][x] = Math.round(shaped * FIELD_MAX);
+      V[z][x] = Math.round(shaped * COARSE_MAX);        // coarse levels 0..10
     }
   }
 
-  // --- 2. Terrace, cap steps, overlay a SMALL summit cone ----------------
-  // Widen plateaus, then shave any tile that spans more than 3 units. Result:
-  // a wavy integer field, max level FIELD_MAX, every tile span <= 3.
+  // --- 2. Coarse terrace + flatten (the proven 55%-flat pass) ------------
+  // Widen plateaus (mode filter), cap coarse tile spans at COARSE_SPAN, then
+  // greedily flatten. This is the same coarse algorithm the old 8-level build
+  // used, so it reliably yields >=55% flat with broad low basins.
   const noLock = Array.from({ length: N }, () => new Array(N).fill(false));
   modeFilter(V, N);
-  clampTileSpan(V, noLock, N, 3);
+  clampTileSpan(V, noLock, N, COARSE_SPAN);
+  flattenTiles(V, noLock, N, COARSE_MAX, COARSE_LIP);
+  clampTileSpan(V, noLock, N, COARSE_SPAN);
+  flattenTiles(V, noLock, N, COARSE_MAX, COARSE_LIP);
+  clampTileSpan(V, noLock, N, COARSE_SPAN);
+  flattenTiles(V, noLock, N, COARSE_MAX, COARSE_LIP);
+  clampTileSpan(V, noLock, N, COARSE_SPAN);
 
-  // Single unique summit: a 3×3 vertex block (=> 2×2 = 4 flat tiles) at
-  // MAX_HEIGHT on the field maximum, wrapped in a SMALL terraced Chebyshev cone
-  // that only reaches out to radius R. Levels: cheb 0 -> 8, 1..2 -> 7, 3..4 -> 6;
-  // beyond R the cone is not applied at all, so the summit is a compact local
-  // peak instead of a map-wide gradient. Blending by max() preserves the step
-  // cap: max of a 1-Lipschitz cone and a <=3-span field is still <=3-span
-  // (|max(a,b)-max(c,d)| <= max(|a-c|,|b-d|)).
+  // --- 2b. Double every level to the fine 32-level grid ------------------
+  // Doubling preserves the flat tiles exactly and doubles every span, so the
+  // general landscape now lives on levels 0..FIELD_MAX with ordinary steps of
+  // 2..GEN_SPAN — the same WORLD-SPACE relief as the old build under the new
+  // HEIGHT_SCALE = 0.25.
+  for (let z = 0; z < N; z++) for (let x = 0; x < N; x++) V[z][x] *= 2;
+
+  // --- 3. Overlay the unique reserved summit -----------------------------
+  // Single unique summit at a seed-dependent top level S in [24, 31], sitting on
+  // the field maximum as a 3×3 vertex block (=> 2×2 = 4 flat tiles), wrapped in a
+  // terraced Chebyshev cone: one big step (WALL_CAP=6) from the block to the
+  // first ring, then gentler GEN_SPAN steps down until the cone submerges into
+  // the surrounding field. The cone is applied via max() and every raised vertex
+  // is LOCKED, so the flatten/clamp passes preserve the reserved summit levels
+  // (> FIELD_MAX) instead of shaving them back to ground.
+  const S = Math.min(MAX_HEIGHT, 24 + Math.floor(rng() * 8)); // 24..31
   const BLK = 3;                                    // summit block side (vertices)
-  const RING = 2;                                   // terrace width (vertices)
-  const R = 4;                                      // cone reach (Chebyshev)
+  // coneLevel(cheb): a stepped terrace dropping by WALL_CAP (6) every 2 rings, so
+  // each shelf is 2 vertices wide and contributes FLAT ring tiles (not just
+  // slopes) while the tall summit reaches the surrounding field. The flat shelves
+  // keep the >=55% flat guarantee even with the reserved summit (24..31) sitting
+  // well above the FIELD_MAX (12) ground, and give the peak the terraced Sentinel
+  // silhouette. Each shelf edge is a WALL_CAP cliff (the "occasional" big steps).
+  const coneLevel = (cheb) => S - WALL_CAP * Math.ceil(cheb / 2);
+  // Reach: extend the cone all the way down until it submerges (coneLevel <= 0).
+  // A vertex is raised+locked ONLY where coneLevel(cheb) > field there, so the
+  // cone stops PER-VERTEX exactly where it meets the field. Because the cone
+  // drops by WALL_CAP per ring, the boundary wall between the last locked ring k
+  // and the first free field vertex is coneLevel(k) - field(k+1) <= WALL_CAP:
+  // coneLevel(k) = coneLevel(k+1)+WALL_CAP <= field(k+1)+WALL_CAP (the +1 vertex
+  // submerged), so the wall <= WALL_CAP. This makes the tall-summit descent meet
+  // arbitrary ground with no wall taller than 6.
+  let R = 1;
+  while (coneLevel(R + 1) > 0) R++;
   const bx = Math.max(0, Math.min(N - BLK, px - (BLK >> 1)));
   const bz = Math.max(0, Math.min(N - BLK, pz - (BLK >> 1)));
   const bx1 = bx + BLK - 1, bz1 = bz + BLK - 1;
   const locked = Array.from({ length: N }, () => new Array(N).fill(false));
-  for (let z = 0; z < N; z++) {
-    for (let x = 0; x < N; x++) {
-      const dx = x < bx ? bx - x : (x > bx1 ? x - bx1 : 0);
-      const dz = z < bz ? bz - z : (z > bz1 ? z - bz1 : 0);
-      const cheb = Math.max(dx, dz);
-      if (cheb <= R) {
-        const cone = MAX_HEIGHT - Math.ceil(cheb / RING);  // 8, 7,7, 6,6
-        if (cone > V[z][x]) V[z][x] = cone;
-        if (cheb === 0) locked[z][x] = true;               // summit block: pinned
+  // applyCone: raise each footprint vertex to its cone level where the cone is
+  // higher than the current field, and LOCK exactly those raised vertices. Called
+  // again after every flatten pass: a flatten can lower a free field vertex just
+  // outside the current cone edge, which would break the submerge guarantee — so
+  // re-asserting the cone re-raises and re-locks it, keeping every cone/field
+  // boundary tile at span <= WALL_CAP while touching as few vertices as possible.
+  const applyCone = () => {
+    for (let z = 0; z < N; z++) {
+      for (let x = 0; x < N; x++) {
+        const dx = x < bx ? bx - x : (x > bx1 ? x - bx1 : 0);
+        const dz = z < bz ? bz - z : (z > bz1 ? z - bz1 : 0);
+        const cheb = Math.max(dx, dz);
+        if (cheb <= R) {
+          const cone = Math.min(MAX_HEIGHT, coneLevel(cheb));
+          if (cone > V[z][x]) { V[z][x] = cone; locked[z][x] = true; }
+        }
       }
-      V[z][x] = Math.max(0, Math.min(MAX_HEIGHT, V[z][x]));
     }
-  }
+  };
+  applyCone();
 
-  // --- 3. Greedy flatten + re-cap ----------------------------------------
-  // Flatten avoidable slopes into plateaus (free vertices capped at MAX_HEIGHT-1
-  // so the summit stays unique), keeping the walls-of-3 the noise produced.
-  // Flatten can nudge a diagonal past span 3, so re-cap and flatten once more;
-  // both passes are monotone, so this settles deterministically.
-  flattenTiles(V, locked, N, MAX_HEIGHT - 1, 3);
-  clampTileSpan(V, locked, N, 3);
-  flattenTiles(V, locked, N, MAX_HEIGHT - 1, 3);
-  clampTileSpan(V, locked, N, 3);
+  // --- 3b. Settle summit-adjacent slopes, cap walls at WALL_CAP ----------
+  // Flatten avoidable slopes (free vertices capped at FIELD_MAX so the summit
+  // stays the unique maximum); the locked cone vertices are skipped. Re-assert
+  // the cone after each flatten so the boundary submerge guarantee holds, then a
+  // final span cap. Because the whole terraced cone is locked and submerges
+  // per-vertex, every cone/field boundary tile has all its field corners at a
+  // ring >= C - WALL_CAP (C = adjacent cone level) => span <= WALL_CAP (6). This
+  // clamp only shaves diagonal over-spans left in the FREE field.
+  flattenTiles(V, locked, N, FIELD_MAX, GEN_SPAN);
+  applyCone();
+  clampTileSpan(V, locked, N, WALL_CAP);
+  flattenTiles(V, locked, N, FIELD_MAX, GEN_SPAN);
+  applyCone();
+  clampTileSpan(V, locked, N, WALL_CAP);
 
   // --- 4. Build tiles from the vertex field ------------------------------
   const tiles = [];

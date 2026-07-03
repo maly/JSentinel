@@ -71,17 +71,63 @@ function setupLevel(w, rng) {
   const summit = pickRandom(flats.filter((t) => t.height === maxH), rng);
   w.addObject({ type: 'pedestal', x: summit.x, z: summit.z });
   const sentinel = w.addObject({ type: 'sentinel', x: summit.x, z: summit.z, facing: rng() * Math.PI * 2 });
+  const minH = Math.min(...flats.map((t) => t.height));
+
+  // Sentries: 1-3 mini sentinels on LOCAL hilltops (flat tiles at least as
+  // high as all 8 neighbours, below the summit), spread evenly — each pick
+  // maximizes its minimum distance to the Sentinel and prior sentries.
+  const size = w.tiles.length;
+  const tileTopH = (x, z) => {
+    const t = w.tiles[z][x];
+    return t.flat ? t.height : Math.max(...t.h);
+  };
+  const hilltops = flats.filter((t) => {
+    if (t.height >= maxH || w.objectsAt(t.x, t.z).length > 0) return false;
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue;
+        const nx = t.x + dx, nz = t.z + dz;
+        if (nx < 0 || nz < 0 || nx >= size || nz >= size) continue;
+        if (tileTopH(nx, nz) > t.height) return false;
+      }
+    }
+    return true;
+  });
+  // Prefer the higher third of hilltop candidates — the summit dwarfs the
+  // general landscape, so an absolute midpoint threshold would filter out
+  // every real hill.
+  const byHeight = hilltops.slice().sort((a, b) => b.height - a.height);
+  const sentryCount = 1 + Math.floor(rng() * 3);        // 1..3
+  const elevated = byHeight.slice(0, Math.max(sentryCount * 3, Math.ceil(byHeight.length / 3)));
+  let sentryPool = elevated.length >= sentryCount ? elevated : hilltops;
+  const anchors = [{ x: summit.x, z: summit.z }];
+  const sentries = [];
+  for (let i = 0; i < sentryCount && sentryPool.length; i++) {
+    let best = null, bestScore = -1;
+    for (const c of sentryPool) {
+      const score = Math.min(...anchors.map((a) => (a.x - c.x) ** 2 + (a.z - c.z) ** 2));
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+    anchors.push(best);
+    sentryPool = sentryPool.filter((c) => c !== best);
+    sentries.push(w.addObject({
+      type: 'sentry', x: best.x, z: best.z,
+      facing: rng() * Math.PI * 2, _rotT: rng() * 10,   // staggered scan phase
+    }));
+  }
 
   // Player start: an empty low flat tile, far from the Sentinel and with its
-  // base square hidden from the Sentinel's eye (terrain LOS, ignoring facing —
-  // the Sentinel sweeps, so a merely-out-of-cone tile is not safe).
-  const minH = Math.min(...flats.map((t) => t.height));
-  const sentinelEye = { x: summit.x + 0.5, y: sentinel.y + 1.9, z: summit.z + 0.5 };
+  // base square hidden from every watcher's eye (terrain LOS, ignoring facing
+  // — watchers sweep, so a merely-out-of-cone tile is not safe).
+  const eyes = [
+    { x: summit.x + 0.5, y: sentinel.y + 1.9, z: summit.z + 0.5 },
+    ...sentries.filter(Boolean).map((s) => ({ x: s.x + 0.5, y: s.y + 1.7, z: s.z + 0.5 })),
+  ];
   const lows = flats.filter((t) => t.height <= minH + 1 && w.objectsAt(t.x, t.z).length === 0);
-  const hidden = lows.filter(
-    (t) => !w.canSee(sentinelEye, { x: t.x + 0.5, y: w.surfaceY(t.x, t.z) + 0.05, z: t.z + 0.5 }),
-  );
-  const pool = hidden.length ? hidden : lows;
+  const basePoint = (t) => ({ x: t.x + 0.5, y: w.surfaceY(t.x, t.z) + 0.05, z: t.z + 0.5 });
+  const hiddenAll = lows.filter((t) => eyes.every((e) => !w.canSee(e, basePoint(t))));
+  const hiddenSentinel = lows.filter((t) => !w.canSee(eyes[0], basePoint(t)));
+  const pool = hiddenAll.length ? hiddenAll : (hiddenSentinel.length ? hiddenSentinel : lows);
   const dist2 = (t) => (t.x - summit.x) ** 2 + (t.z - summit.z) ** 2;
   pool.sort((a, b) => dist2(b) - dist2(a));
   const start = pickRandom(pool.slice(0, Math.max(1, Math.floor(pool.length / 10))), rng);

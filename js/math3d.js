@@ -23,10 +23,11 @@ export const FOCAL = 430;
 // geometry behind / straddling the camera never projects to garbage.
 export const NEAR = 0.05;
 
-// 1 corner-height unit = HEIGHT_SCALE world Y units. 0.5 gives the gentle,
-// clean Sentinel look (max height 11 -> 5.5 world units over a 32-wide map).
+// 1 corner-height unit = HEIGHT_SCALE world Y units. 0.25 matches the original
+// game's finer 32-LEVEL grid: a summit near level ~28 -> ~7 world units over a
+// 31-wide map, while the general landscape (levels 0..~20) stays gentle.
 // Integration note: world.js / game.js should read this to convert heights.
-export const HEIGHT_SCALE = 0.5;
+export const HEIGHT_SCALE = 0.25;
 
 // ---- Vector helpers (plain {x,y,z} objects) -----------------------------
 export function vec(x = 0, y = 0, z = 0) { return { x, y, z }; }

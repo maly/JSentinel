@@ -3,6 +3,7 @@ export const ENERGY = Object.freeze({
   boulder: 2,
   robot: 3,
   meanie: 1,
+  sentry: 4,
   sentinel: 4,
 });
 
@@ -18,6 +19,7 @@ const OBJECT_HEIGHT = Object.freeze({
   boulder: 1.0,
   robot: 2.0,   // original proportions: a robot is two boulders tall
   meanie: 1.35,
+  sentry: 2.0,   // a small sentinel, robot-sized
   sentinel: 2.2,
   pedestal: 1.0,
 });
@@ -27,6 +29,7 @@ const OBJECT_RADIUS = Object.freeze({
   boulder: 0.38,
   robot: 0.32,
   meanie: 0.30,
+  sentry: 0.36,
   sentinel: 0.42,
   pedestal: 0.45,
 });
@@ -168,7 +171,7 @@ export class World {
       return Boolean(tile && tile.flat);
     }
     if (type === 'boulder') return top.type === 'boulder';
-    if (type === 'tree' || type === 'robot' || type === 'sentinel' || type === 'meanie') {
+    if (type === 'tree' || type === 'robot' || type === 'sentinel' || type === 'sentry' || type === 'meanie') {
       return STACKABLE_BASE.has(top.type);
     }
     return false;

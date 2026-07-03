@@ -1,3 +1,4 @@
 # Playwright verification artifacts
 .playwright-mcp/
 *.png
+CLAUDE.md

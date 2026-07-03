@@ -22,9 +22,12 @@ const MEANIE_FACE_TOLERANCE = Math.PI / 12;
 const EYE_HEIGHT = Object.freeze({
   tree: 1.15,
   robot: 1.8,    // robot stands 2.0 tall (two boulders)
+  sentry: 1.7,   // robot-sized mini sentinel
   sentinel: 1.9,
   meanie: 1.15,
 });
+
+const WATCHER_TYPES = new Set(['sentinel', 'sentry']);
 
 function centerOf(objectOrTile) {
   return { x: objectOrTile.x + 0.5, z: objectOrTile.z + 0.5 };
@@ -282,39 +285,47 @@ export class Game {
     return true;
   }
 
+  // All watchers — the Sentinel and its sentries — behave the same way:
+  // rotate in 30° steps (own timer, staggerable via _rotT), scan-and-drain
+  // objects after each turn, drain the player when they see their square,
+  // and summon a meanie when they see only the head.
   _runSentinel(dt) {
-    const sentinel = this.world.objects.find((object) => object.type === 'sentinel');
-    if (!sentinel) return;
+    this._meanieCooldown = Math.max(0, (this._meanieCooldown ?? 0) - dt);
+    let scan = 0;
 
-    this._sentinelRotateTimer += dt;
-    if (this._sentinelRotateTimer >= SENTINEL_ROTATE_SECONDS) {
-      this._sentinelRotateTimer = 0;
-      sentinel.facing = ((sentinel.facing ?? 0) + Math.PI / 6) % (Math.PI * 2);
-      // After turning, the sentinel scans the fresh view and feeds:
-      // robots first, then boulders — one unit per scan.
-      this._scanAndDrainObjects(sentinel);
-    }
+    for (const watcher of this.world.objects) {
+      if (!WATCHER_TYPES.has(watcher.type)) continue;
 
-    const baseVisible = this._sentinelSees(sentinel, this._playerBasePoint());
-    const headVisible = this._sentinelSees(sentinel, this._playerHeadPoint());
-    this.scannedBySentinel = baseVisible || headVisible;
-    this.scanState = baseVisible ? 2 : (headVisible ? 1 : 0);
+      watcher._rotT = (watcher._rotT ?? 0) + dt;
+      if (watcher._rotT >= SENTINEL_ROTATE_SECONDS) {
+        watcher._rotT = 0;
+        watcher.facing = ((watcher.facing ?? 0) + Math.PI / 6) % (Math.PI * 2);
+        // After turning, scan the fresh view and feed: robots before boulders.
+        this._scanAndDrainObjects(watcher);
+      }
 
-    this._sentinelDrainTimer += dt;
-    if (this._sentinelDrainTimer >= SENTINEL_DRAIN_SECONDS) {
-      this._sentinelDrainTimer = 0;
-      if (baseVisible) {
-        this._drainPlayer();
-        this._spawnTreeInFov(sentinel);
+      const baseVisible = this._sentinelSees(watcher, this._playerBasePoint());
+      const headVisible = this._sentinelSees(watcher, this._playerHeadPoint());
+      scan = Math.max(scan, baseVisible ? 2 : (headVisible ? 1 : 0));
+
+      watcher._drainT = (watcher._drainT ?? 0) + dt;
+      if (watcher._drainT >= SENTINEL_DRAIN_SECONDS) {
+        watcher._drainT = 0;
+        if (baseVisible) {
+          this._drainPlayer();
+          this._spawnTreeInFov(watcher);
+        }
+      }
+
+      const meanieExists = this.world.objects.some((object) => object.type === 'meanie');
+      if (!baseVisible && headVisible && !meanieExists && this._meanieCooldown === 0) {
+        this._convertNearestTreeToMeanie();
+        this._meanieCooldown = MEANIE_COOLDOWN_SECONDS;
       }
     }
 
-    this._meanieCooldown = Math.max(0, (this._meanieCooldown ?? 0) - dt);
-    const meanieExists = this.world.objects.some((object) => object.type === 'meanie');
-    if (!baseVisible && headVisible && !meanieExists && this._meanieCooldown === 0) {
-      this._convertNearestTreeToMeanie();
-      this._meanieCooldown = MEANIE_COOLDOWN_SECONDS;
-    }
+    this.scannedBySentinel = scan > 0;
+    this.scanState = scan;
   }
 
   _runMeanies(dt) {
