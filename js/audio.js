@@ -6,6 +6,9 @@
 //   context(): AudioContext|null,   // the shared context (null before unlock)
 //   musicBus(): GainNode|null,      // music sub-bus — music routes UNDER it
 //   setVolumes({master,music,effects}): void, // 0..100 percentages (Settings)
+//   setMuted(bool): bool,   // session-only mute; does not touch Settings/localStorage
+//   toggleMuted(): bool,    // flips mute, returns new muted state
+//   isMuted(): bool,
 // }
 //
 // Bus graph:  destination <- limiter <- master <- sfxBus  (SFX play() routes here)
@@ -37,6 +40,11 @@ export function createAudio() {
   // beforehand so Settings can be changed before the first user gesture.
   const vols = { master: 100, music: 100, effects: 100 };
 
+  // Session-only mute flag (M key) — never persisted, never touches `vols`.
+  // Muting just zeroes the master gain; unmuting re-applies the stored
+  // slider values, so Settings state in localStorage is untouched either way.
+  let muted = false;
+
   function clampPct(n) {
     n = Number(n);
     if (!Number.isFinite(n)) return 100;
@@ -44,7 +52,7 @@ export function createAudio() {
   }
 
   function applyVolumes() {
-    if (master) master.gain.value = MASTER_MAX * vols.master / 100;
+    if (master) master.gain.value = muted ? 0 : MASTER_MAX * vols.master / 100;
     if (sfxBus) sfxBus.gain.value = vols.effects / 100;
     if (musicSub) musicSub.gain.value = vols.music / 100;
   }
@@ -99,12 +107,24 @@ export function createAudio() {
     applyVolumes();
   }
 
+  // Session-only mute — does not read or write Settings/localStorage. `setMuted`
+  // sets the state explicitly; `toggleMuted` flips it and returns the new value.
+  function setMuted(next) {
+    muted = !!next;
+    applyVolumes();
+    return muted;
+  }
+  function toggleMuted() {
+    return setMuted(!muted);
+  }
+  function isMuted() { return muted; }
+
   // Expose the shared context + music sub-bus so music.js can reuse them (one
   // AudioContext for the whole app). Both are null until unlock() runs.
   function context() { return ctx; }
   function musicBus() { return musicSub; }
 
-  return { unlock, play, context, musicBus, setVolumes };
+  return { unlock, play, context, musicBus, setVolumes, setMuted, toggleMuted, isMuted };
 }
 
 // ---------- low-level helpers ----------

@@ -544,6 +544,13 @@ function frame(now) {
       }
       continue;
     }
+    if (action === 'mute') {
+      // Allowed from playing/won/dead/complete — session-only, doesn't touch
+      // Settings/localStorage (see audio.js setMuted/toggleMuted).
+      const muted = audio.toggleMuted();
+      hud.showMessage(muted ? 'Sound off' : 'Sound on', 1500);
+      continue;
+    }
     if (state !== 'playing') continue;
     if (action === 'uturn') {
       camera.yaw += Math.PI;

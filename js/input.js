@@ -2,7 +2,7 @@
 //
 // createInput() -> {
 //   held: { yawLeft, yawRight, pitchUp, pitchDown, fast },  // booleans, live-updated
-//   pollActions(): Array<'absorb'|'tree'|'boulder'|'robot'|'transfer'|'hyperspace'|'uturn'|'start'>,
+//   pollActions(): Array<'absorb'|'tree'|'boulder'|'robot'|'transfer'|'hyperspace'|'uturn'|'mute'|'start'>,
 //   destroy(): void   // removes listeners (not required by contract, provided for hygiene)
 // }
 
@@ -23,6 +23,7 @@ const ACTION_KEYS = {
   KeyQ: 'transfer',
   KeyH: 'hyperspace',
   KeyE: 'uturn',
+  KeyM: 'mute',
   Enter: 'start',
 };
 
