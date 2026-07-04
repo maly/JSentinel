@@ -241,7 +241,7 @@ export class World {
         for (const object of this.objects) {
           if (this._pointInsideObject(origin, object)) continue;
           if (this._pointInsideObject(point, object)) {
-            objectHit = { object, point };
+            objectHit = { object, point, face: this._objectFaceHit(origin, direction, object) };
             break;
           }
         }
@@ -259,6 +259,7 @@ export class World {
             tile: { x: objectHit.object.x, z: objectHit.object.z },
             object: objectHit.object,
             point: objectHit.point,
+            face: objectHit.face,
             groundTile,
           };
         }
@@ -277,10 +278,43 @@ export class World {
         tile: { x: objectHit.object.x, z: objectHit.object.z },
         object: objectHit.object,
         point: objectHit.point,
+        face: objectHit.face,
         groundTile: null,
       };
     }
     return null;
+  }
+
+  // Classify WHICH surface of an object's collision volume (a vertical
+  // cylinder) the crosshair ray enters through: the top cap, the bottom cap, or
+  // the side wall. Done analytically from the ray, NOT from the discrete march
+  // sample, so it is independent of stepSize and correct on corner grazes:
+  //   - a DESCENDING ray that crosses the top plane (y = topY) within the cap
+  //     disk enters through the top — above the top there is no solid, so that
+  //     crossing IS the entry. If it crosses the top plane OUTSIDE the disk it
+  //     is still outside the cylinder there and can only enter the side lower
+  //     down.
+  //   - symmetric reasoning for an ASCENDING ray and the bottom cap.
+  //   - anything else is a side-wall entry.
+  _objectFaceHit(origin, direction, object) {
+    const center = objectCenter(object);
+    const baseY = object.y ?? this.surfaceY(object.x, object.z);
+    const topY = baseY + objectHeight(object);
+    const withinDisk = (t, radius) => {
+      const px = origin.x + direction.x * t;
+      const pz = origin.z + direction.z * t;
+      const dx = px - center.x;
+      const dz = pz - center.z;
+      return dx * dx + dz * dz <= radius * radius;
+    };
+    if (direction.y < -EPSILON) {
+      const t = (topY - origin.y) / direction.y;
+      if (t > 0 && withinDisk(t, objectRadiusAt(object, objectHeight(object)))) return 'top';
+    } else if (direction.y > EPSILON) {
+      const t = (baseY - origin.y) / direction.y;
+      if (t > 0 && withinDisk(t, objectRadiusAt(object, 0))) return 'bottom';
+    }
+    return 'side';
   }
 
   _tileAt(x, z) {

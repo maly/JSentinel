@@ -253,6 +253,15 @@ export class Game {
         this._message('Aim at the top of the stack');
         return false;
       }
+      // Building ONTO a stack requires focusing the top object's TOP FACE.
+      // Hitting its side (or bottom) does not: otherwise a player standing
+      // beside a pile could keep aiming at the flank of the highest boulder and
+      // stack a whole tower "for free" from one spot — pointing UP at a side is
+      // not the same as looking DOWN onto the active surface.
+      if (pickResult.face !== 'top') {
+        this._message('Aim at the top face of the stack');
+        return false;
+      }
       target = { x: o.x, z: o.z };
     } else {
       target = tile ?? pickResult?.tile ?? null;

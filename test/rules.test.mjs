@@ -211,7 +211,7 @@ function testBuildOnStackViaTopFace() {
   const base = world.addObject({ type: 'boulder', x: 2, z: 2 });
 
   // Focusing the top face (object hit) stacks a boulder on top.
-  assert.equal(game.doAction('boulder', { tile: { x: 2, z: 2 }, object: base, point: { x: 2.5, y: 1, z: 2.5 }, groundTile: { x: 2, z: 2 } }), true);
+  assert.equal(game.doAction('boulder', { tile: { x: 2, z: 2 }, object: base, point: { x: 2.5, y: 1, z: 2.5 }, face: 'top', groundTile: { x: 2, z: 2 } }), true);
   assert.equal(world.objectsAt(2, 2).length, 2);
 
   // Pointing at the bare base square of the occupied tile is refused.
@@ -222,6 +222,93 @@ function testBuildOnStackViaTopFace() {
   // Pointing at a BURIED object (not the top of the stack) is also refused.
   assert.equal(game.doAction('boulder', { tile: { x: 2, z: 2 }, object: base, point: { x: 2.5, y: 0.4, z: 2.5 }, groundTile: { x: 2, z: 2 } }), false);
   assert.equal(world.objectsAt(2, 2).length, count);
+}
+
+// FACE RULE: building onto a stack requires aiming at the TOP FACE of the top
+// object. A real crosshair ray that hits the SIDE of the top boulder (e.g. the
+// player standing beside the pile aiming up at its flank) must be refused —
+// otherwise a whole tower could be stacked "for free" from one spot. Uses the
+// real pickTarget geometry so `face` is derived, not hand-forged.
+function testBuildRejectsSideOfTopStone() {
+  const world = new World(makeTiles(14, 14));
+  const game = new Game(world, { x: 0, z: 6, energy: 20 });
+  // Two boulders at (6,6): base 0..1, top boulder 1..2.
+  world.addObject({ type: 'boulder', x: 6, z: 6 });
+  const topBoulder = world.addObject({ type: 'boulder', x: 6, z: 6 });
+
+  // Roughly LEVEL ray at y ~1.5 hits the near WALL of the top boulder (only the
+  // top boulder spans that height — the base ends at y=1.0).
+  const eye = { x: 1.5, y: 1.5, z: 6.5 };
+  const pick = pickRay(world, eye, { x: 6.5, y: 1.5, z: 6.5 });
+  assert.equal(pick.object, topBoulder);
+  assert.equal(pick.face, 'side');
+
+  assert.equal(game.doAction('boulder', pick), false);
+  assert.equal(world.objectsAt(6, 6).length, 2);   // nothing stacked
+  assert.equal(game.energy, 20);                    // no energy spent
+}
+
+// FACE RULE (positive): aiming DOWN onto the top cap of the top boulder — the
+// active surface — passes, and the new object lands on the stack.
+function testBuildAcceptsTopFaceViaRealRay() {
+  const world = new World(makeTiles(14, 14));
+  const game = new Game(world, { x: 0, z: 6, energy: 20 });
+  world.addObject({ type: 'boulder', x: 6, z: 6 });
+  const topBoulder = world.addObject({ type: 'boulder', x: 6, z: 6 }); // top at y=2.0
+
+  // Eye ABOVE the stack, ray descending onto the top cap (crosses y=2.0 within
+  // the disk) — a genuine top-face hit.
+  const eye = { x: 4.5, y: 3.5, z: 6.5 };
+  const pick = pickRay(world, eye, { x: 6.5, y: 1.9, z: 6.5 });
+  assert.equal(pick.object, topBoulder);
+  assert.equal(pick.face, 'top');
+
+  assert.equal(game.doAction('boulder', pick), true);
+  assert.equal(world.objectsAt(6, 6).length, 3);           // stacked
+  assert.equal(game.energy, 20 - ENERGY.boulder);
+}
+
+// FACE RULE — bottom-up SIDE hit on an ELEVATED object. A lone boulder sits on
+// a raised summit; the player on low ground aims UP at its flank. The ray
+// climbs into the side wall (never the top cap), so face === 'side' and build
+// is refused. Confirms the classifier works for ascending rays too.
+function testBuildRejectsSideOfElevatedBoulderFromBelow() {
+  // Summit at (6,6) raised to level 8 (world Y 2.0); rest of the map flat.
+  const world = new World(makeTiles(14, 14, (x, z) => (x === 6 && z === 6 ? 8 : 0)));
+  const game = new Game(world, { x: 0, z: 6, energy: 20 });
+  const boulder = world.addObject({ type: 'boulder', x: 6, z: 6 }); // spans 2.0..3.0
+
+  // Low eye; aim at the boulder's flank around y ~2.5 — the ray ascends into
+  // the side wall.
+  const eye = { x: 3.5, y: 1.8, z: 6.5 };
+  const pick = pickRay(world, eye, { x: 6.5, y: 2.5, z: 6.5 });
+  assert.equal(pick.object, boulder);
+  assert.equal(pick.face, 'side');
+
+  assert.equal(game.doAction('boulder', pick), false);
+  assert.equal(world.objectsAt(6, 6).length, 1);
+  assert.equal(game.energy, 20);
+}
+
+// REGRESSION: absorbing the TOP of a stack by hitting its BODY (side) must
+// still work — absorb is deliberately forgiving here (rule 3). Only building is
+// tightened by the face rule; absorb is unchanged. Real ray.
+function testAbsorbSideOfTopStoneStillWorks() {
+  const world = new World(makeTiles(14, 14));
+  const game = new Game(world, { x: 0, z: 6, energy: 10 });
+  const base = world.addObject({ type: 'boulder', x: 6, z: 6 });
+  const topBoulder = world.addObject({ type: 'boulder', x: 6, z: 6 }); // top boulder 1..2
+
+  const eye = { x: 1.5, y: 1.5, z: 6.5 };
+  const pick = pickRay(world, eye, { x: 6.5, y: 1.5, z: 6.5 });
+  assert.equal(pick.object, topBoulder);
+  assert.equal(pick.face, 'side');
+
+  // Side hit of the stack's top → absorbs the top boulder; the base remains.
+  assert.equal(game.doAction('absorb', pick), true);
+  assert.equal(game.energy, 10 + ENERGY.boulder);
+  assert.equal(world.objects.includes(topBoulder), false);
+  assert.equal(world.objects.includes(base), true);
 }
 
 // Rule 4: a lone object resting on the ground may be absorbed by pointing at
@@ -457,6 +544,10 @@ testBoulderDrainsToTree();
 testMeanieTriggerWhenHeadVisibleBaseHidden();
 testAbsorbTargetsSquareTopObject();
 testBuildOnStackViaTopFace();
+testBuildRejectsSideOfTopStone();
+testBuildAcceptsTopFaceViaRealRay();
+testBuildRejectsSideOfElevatedBoulderFromBelow();
+testAbsorbSideOfTopStoneStillWorks();
 testAbsorbLoneBoulderViaSquare();
 testAbsorbStackTopDownOnly();
 testPedestalSentinelAbsorb();
