@@ -310,24 +310,57 @@ function fadeTo(mid, opts = {}) {
 function beginWonCinematic(onDone) {
   state = 'won';            // stops logic + gameplay input; screen shown later
   hud.showScreen(null);     // ensure no overlay screen is up during the wave
-  const dur = 1.8;
-  const fade = 0.55;        // per-object fade-out duration
   const px = game.camera.x + 0.5;
   const pz = game.camera.z + 0.5;
-  let maxD = 1;
+  // Collapse-wave origin: the Sentinel's summit. The pedestal survives even
+  // after the Sentinel itself is absorbed, so prefer it; then any watcher; then
+  // fall back to the highest terrain vertex (center of the tallest tile).
+  let origin = null;
   for (const o of world.objects) {
-    const dx = o.x + 0.5 - px;
-    const dz = o.z + 0.5 - pz;
-    o._wonDist = Math.hypot(dx, dz);
-    if (o._wonDist > maxD) maxD = o._wonDist;
+    if (o.type === 'pedestal') { origin = { x: o.x + 0.5, z: o.z + 0.5 }; break; }
   }
+  if (!origin) {
+    for (const o of world.objects) {
+      if (o.type === 'sentinel' || o.type === 'sentry') { origin = { x: o.x + 0.5, z: o.z + 0.5 }; break; }
+    }
+  }
+  if (!origin) {
+    let best = -Infinity, bx = world.width / 2, bz = world.depth / 2;
+    for (let z = 0; z < world.depth; z++) {
+      for (let x = 0; x < world.width; x++) {
+        const h = world.tiles[z][x].h;
+        const m = Math.max(h[0], h[1], h[2], h[3]);
+        if (m > best) { best = m; bx = x + 0.5; bz = z + 0.5; }
+      }
+    }
+    origin = { x: bx, z: bz };
+  }
+  // Each object dissolves when the wave front reaches it (distance from origin).
+  for (const o of world.objects) {
+    const dx = o.x + 0.5 - origin.x;
+    const dz = o.z + 0.5 - origin.z;
+    o._wonDist = Math.hypot(dx, dz);
+  }
+  // Farthest map corner from the origin: how far the front must travel to clear
+  // the whole landscape. Tuned so the front crosses the map in ~waveTravel s.
+  let maxR = 1;
+  for (const [cx, cz] of [[0, 0], [world.width, 0], [0, world.depth], [world.width, world.depth]]) {
+    const d = Math.hypot(cx - origin.x, cz - origin.z);
+    if (d > maxR) maxR = d;
+  }
+  const rotDelay = 0.3;
+  const waveTravel = 2.1;             // s for the front to reach the far corner
+  const speed = maxR / waveTravel;    // world-units per second
+  const band = 8;                     // collapse-zone width (dither + sink), units
+  const fall = 0.05;                  // sink accel: dropY = -fall * prog^2
+  const edge = 1.6;                   // crest-highlight width at the front, units
+  const tail = band / speed;          // extra time for the last tiles to finish
   // Winning typically means transferring onto a high point or absorbing the
   // Sentinel, both of which tend to sit near the map edge — the player can
   // easily be looking out over the boundary, away from the landscape, right
   // when the dissolve wave starts. Steer the camera toward the remaining
   // scenery first so the wave is actually visible. Delay the wave itself a
-  // touch (rotDelay) so the turn is visibly underway before it starts.
-  const rotDelay = 0.3;
+  // touch (rotDelay, declared above) so the turn is visibly underway first.
   let cx = 0, cz = 0, n = 0;
   for (const o of world.objects) { cx += o.x + 0.5; cz += o.z + 0.5; n += 1; }
   let aimX, aimZ;
@@ -355,10 +388,16 @@ function beginWonCinematic(onDone) {
     }
   }
   for (const o of world.objects) {
-    o._wonDelay = rotDelay + (o._wonDist / maxD) * (dur - fade);
     if (o.dissolve === undefined) o.dissolve = 1; // start solid, fade presentationally
   }
-  cinematic = { t: 0, dur: dur + rotDelay, fade, onDone };
+  // Fire the won-screen fade once the front has cleared most of the landscape
+  // (the fade itself overlaps the final tiles finishing their collapse).
+  const dur = rotDelay + waveTravel + tail * 0.6;
+  cinematic = {
+    t: 0, dur, onDone,
+    origin, speed, band, fall, edge, rotDelay,
+    wave: { x: origin.x, z: origin.z, radius: 0, band, fall, edge },
+  };
 }
 
 // Advance the won-cinematic dissolve wave. Called every frame while active.
@@ -381,12 +420,17 @@ function updateCinematic(dt) {
   }
   if (!cinematic || !world) return;
   cinematic.t += dt;
-  const { t, fade } = cinematic;
+  // Radial collapse front: radius grows linearly from the summit after rotDelay.
+  const radius = cinematic.speed * Math.max(0, cinematic.t - cinematic.rotDelay);
+  cinematic.wave.radius = radius;
+  // Objects dissolve in lockstep with the terrain wave: the same front reaches
+  // each object at radius === its distance from the origin, then it dithers away
+  // over `band`. Its contact shadow fades with the same `dissolve` value.
   for (const o of world.objects) {
-    if (o._wonDelay === undefined) continue;
-    const local = t - o._wonDelay;
-    let dv = 1 - local / fade;
-    dv = dv > 1 ? 1 : (dv < 0 ? 0 : dv);   // 0 => renderer skips it (fully gone)
+    if (o._wonDist === undefined) continue;
+    const prog = radius - o._wonDist;         // >0 => front has passed it
+    let dv = prog <= 0 ? 1 : 1 - prog / cinematic.band;
+    dv = dv > 1 ? 1 : (dv < 0 ? 0 : dv);      // 0 => renderer skips it (fully gone)
     o.dissolve = dv;
   }
   if (cinematic.t >= cinematic.dur) {
@@ -906,6 +950,7 @@ function frame(now) {
       pick,
       time: now / 1000,
       skipObjectId: game ? game.playerShellId : null,
+      cinematicWave: cinematic ? cinematic.wave : null,
     });
   } else {
     ctx.fillStyle = '#000';

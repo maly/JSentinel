@@ -217,7 +217,7 @@ function signedArea2D(pts) {
 // ---- Polygon submission -------------------------------------------------
 // A "poly" queued for drawing: { pts:[{x,y}], depth, fill, stroke }.
 // Builds one poly from world-space verts. `cull`: backface cull (closed mesh).
-function buildPoly(list, view, worldVerts, fillCol, cull, strokeCol = null, depthMode = 'avg', alpha = 1) {
+function buildPoly(list, view, worldVerts, fillCol, cull, strokeCol = null, depthMode = 'avg', alpha = 1, diss = null) {
   // to view space
   const vv = new Array(worldVerts.length);
   for (let i = 0; i < worldVerts.length; i++) vv[i] = view.toView(worldVerts[i]);
@@ -250,7 +250,20 @@ function buildPoly(list, view, worldVerts, fillCol, cull, strokeCol = null, dept
   const fillFog = lerpRgb(fillCol, fogCol, fogT);
   const strokeBase = strokeCol || shade(fillCol, 0.62);
   const strokeFog = lerpRgb(strokeBase, fogCol, fogT);
-  list.push({ pts, depth, fill: rgbStr(fillFog), stroke: rgbStr(strokeFog), alpha });
+  const poly = { pts, depth, fill: rgbStr(fillFog), stroke: rgbStr(strokeFog), alpha };
+  // Optional dither-dissolve (won-cinematic terrain wave): tag the poly with its
+  // own projected vertical span so the shared applyDitherClip stipples it exactly
+  // like a dissolving object. Only ever set when `diss` is passed (wave active),
+  // so a normal frame pays nothing here.
+  if (diss !== null) {
+    let yt = Infinity, yb = -Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      if (pts[i].y < yt) yt = pts[i].y;
+      if (pts[i].y > yb) yb = pts[i].y;
+    }
+    poly.diss = diss; poly.dsTop = yt; poly.dsBot = yb;
+  }
+  list.push(poly);
 }
 
 // ---- Terrain ------------------------------------------------------------
@@ -263,7 +276,7 @@ function toward(rgb, white, t) {
   ];
 }
 
-function collectTerrain(list, view, world, pickTile, pickPulse = 0.35) {
+function collectTerrain(list, view, world, pickTile, pickPulse = 0.35, wave = null) {
   const tiles = world.tiles;
   const size = tiles.length;
   const pal = activePalette();
@@ -274,11 +287,32 @@ function collectTerrain(list, view, world, pickTile, pickPulse = 0.35) {
     for (let x = 0; x < size; x++) {
       const t = tiles[z][x];
       const [h00, h10, h11, h01] = t.h;
-      // World-space corners (CCW when viewed from above).
-      const p00 = { x: x, y: h00 * HEIGHT_SCALE, z: z };
-      const p10 = { x: x + 1, y: h10 * HEIGHT_SCALE, z: z };
-      const p11 = { x: x + 1, y: h11 * HEIGHT_SCALE, z: z + 1 };
-      const p01 = { x: x, y: h01 * HEIGHT_SCALE, z: z + 1 };
+
+      // Won-cinematic collapse wave: purely presentational. A front of radius
+      // `wave.radius` expands from the Sentinel summit (wave.x, wave.z). Behind
+      // the front each tile (a) sinks with an accelerating fall and (b) dithers
+      // away over a `band`-wide collapse zone, then is dropped entirely. This
+      // whole block is skipped on a normal frame (wave === null) — zero cost.
+      let fallY = 0, waveDiss = null, edgeLit = 0;
+      if (wave) {
+        const dcx = x + 0.5 - wave.x;
+        const dcz = z + 0.5 - wave.z;
+        const prog = wave.radius - Math.sqrt(dcx * dcx + dcz * dcz); // >0 => passed
+        if (prog > 0) {
+          let dv = 1 - prog / wave.band;
+          if (dv <= 0.02) continue;             // fully collapsed: drop the tile
+          if (dv > 1) dv = 1;
+          waveDiss = dv;
+          fallY = -wave.fall * prog * prog;      // accelerating sink
+          if (prog < wave.edge) edgeLit = 1 - prog / wave.edge; // bright crest
+        }
+      }
+
+      // World-space corners (CCW when viewed from above). fallY is 0 off-wave.
+      const p00 = { x: x, y: h00 * HEIGHT_SCALE + fallY, z: z };
+      const p10 = { x: x + 1, y: h10 * HEIGHT_SCALE + fallY, z: z };
+      const p11 = { x: x + 1, y: h11 * HEIGHT_SCALE + fallY, z: z + 1 };
+      const p01 = { x: x, y: h01 * HEIGHT_SCALE + fallY, z: z + 1 };
       let base;
       if (t.flat) {
         base = ((x + z) & 1) ? tileA : tileB;   // checkerboard
@@ -295,6 +329,8 @@ function collectTerrain(list, view, world, pickTile, pickPulse = 0.35) {
       // lighter outline so the player can see what they are targeting.
       const picked = (x === pkx && z === pkz);
       if (picked) base = toward(base, 255, pickPulse);
+      // Wave crest: a subtle light band on the tiles right at the collapse front.
+      if (edgeLit > 0) base = toward(base, 255, 0.22 * edgeLit);
       const strokeShade = picked ? 1.15 : 0.62;
 
       // Triangulation: the game's pick/LOS sampling (world.js terrainYAt)
@@ -304,22 +340,23 @@ function collectTerrain(list, view, world, pickTile, pickPulse = 0.35) {
       // SAME two triangles so the picture matches the pick ray exactly.
       const coplanar = (h00 + h11) === (h10 + h01);
       if (coplanar) {
-        emitFace(list, view, [p00, p10, p11, p01], base, strokeShade);
+        emitFace(list, view, [p00, p10, p11, p01], base, strokeShade, waveDiss);
       } else {
         // triangle 00-10-11 (u >= v) and triangle 00-11-01 (u < v)
-        emitFace(list, view, [p00, p10, p11], base, strokeShade);
-        emitFace(list, view, [p00, p11, p01], base, strokeShade);
+        emitFace(list, view, [p00, p10, p11], base, strokeShade, waveDiss);
+        emitFace(list, view, [p00, p11, p01], base, strokeShade, waveDiss);
       }
     }
   }
 }
 
 // Emit one terrain face (quad or triangle): flat-shade by its own normal, with
-// an explicit stroke shade (brighter for the highlighted pick tile).
-function emitFace(list, view, wv, base, strokeShade) {
+// an explicit stroke shade (brighter for the highlighted pick tile). `diss`
+// (default null) tags the face for the won-cinematic dither collapse.
+function emitFace(list, view, wv, base, strokeShade, diss = null) {
   const bright = faceBrightness(wv, true);
   const fill = shade(base, bright);
-  buildPoly(list, view, wv, fill, false, shade(fill, strokeShade), 'max');
+  buildPoly(list, view, wv, fill, false, shade(fill, strokeShade), 'max', 1, diss);
 }
 
 // ---- Meshes -------------------------------------------------------------
@@ -815,7 +852,7 @@ export function render(ctx, world, camera, uiState = {}) {
   const pickPulse = 0.25 + 0.12 * Math.sin(time * 4);
 
   const list = [];
-  collectTerrain(list, view, world, uiState.pickTile || null, pickPulse);
+  collectTerrain(list, view, world, uiState.pickTile || null, pickPulse, uiState.cinematicWave || null);
   collectObjects(list, view, world, uiState.skipObjectId ?? null);
   collectMotes(list, view, world.motes);
 
