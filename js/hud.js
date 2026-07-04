@@ -256,6 +256,80 @@ const STYLE = `
   0%, 49% { opacity: 1; }
   50%, 100% { opacity: 0.15; }
 }
+
+/* ---------- splash / menu / code screens ---------- */
+/* These screens are interactive (menu clicks, splash "click anywhere"),
+   so they opt back into pointer events that #overlay switches off. */
+.hud-screen.splash,
+.hud-screen.menu,
+.hud-screen.code {
+  pointer-events: auto;
+  cursor: default;
+}
+
+.hud-screen-title.big {
+  font-size: 42px;
+  letter-spacing: 0.22em;
+}
+
+.hud-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.hud-menu-option {
+  font-size: 18px;
+  letter-spacing: 0.16em;
+  color: #4f8a5a;
+  padding: 4px 22px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.hud-menu-option.selected {
+  color: #cfffd6;
+  border-color: #3a6a42;
+  text-shadow: 0 0 10px rgba(120, 255, 140, 0.6);
+}
+
+.hud-menu-option.selected::before { content: "> "; }
+.hud-menu-option.selected::after { content: " <"; }
+
+.hud-code-value {
+  font-size: 32px;
+  letter-spacing: 0.3em;
+  color: #9fffb0;
+  text-shadow: 0 0 12px rgba(120, 255, 140, 0.5);
+  margin: 4px 0;
+}
+
+.hud-code-hint {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: #a8d8b0;
+}
+
+.hud-code-error {
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  color: #ff6b5c;
+  text-shadow: 0 0 8px rgba(255, 60, 40, 0.5);
+  min-height: 1.1em;
+}
+
+.hud-screen-footer {
+  position: absolute;
+  bottom: 16px;
+  left: 0;
+  right: 0;
+  font-size: 11px;
+  line-height: 1.7;
+  letter-spacing: 0.12em;
+  color: #4f8a5a;
+}
 `;
 
 function ensureStyleInjected() {
@@ -292,6 +366,14 @@ const SCREEN_TEXT = {
   dead: { title: 'ABSORBED BY THE SENTINEL', sub: 'PRESS ENTER' },
   complete: { title: 'ALL LANDSCAPES ABSORBED', sub: 'PRESS ENTER' },
 };
+
+// Attribution shown on splash / menu / code screens.
+const FOOTER_LINES = [
+  'BASED ON THE SENTINEL BY GEOFF CRAMMOND',
+  'EKLEKTIK LABS 2026',
+];
+
+const MENU_OPTIONS = ['START GAME', 'ENTER CODE'];
 
 export function createHud(overlayEl) {
   ensureStyleInjected();
@@ -477,5 +559,66 @@ export function createHud(overlayEl) {
     screenEl.style.display = 'flex';
   }
 
-  return { setEnergy, showMessage, setScanState, setScanned, setWatchers, showScreen };
+  // ---- splash / menu / code screens -------------------------------------
+  // Share the .hud-screen container with showScreen(); each rebuilds it from
+  // scratch and toggles it visible. Call showScreen(null) to dismiss.
+
+  function makeDiv(cls, text) {
+    const el = document.createElement('div');
+    el.className = cls;
+    if (text != null) el.textContent = text;
+    return el;
+  }
+
+  function appendFooter() {
+    const footer = makeDiv('hud-screen-footer');
+    for (const line of FOOTER_LINES) footer.appendChild(makeDiv(null, line));
+    screenEl.appendChild(footer);
+  }
+
+  function showSplash() {
+    screenEl.className = 'hud-screen splash';
+    screenEl.innerHTML = '';
+    const titleEl = makeDiv('hud-screen-title big', 'SENTINEL REMAKE');
+    screenEl.appendChild(titleEl);
+    screenEl.appendChild(makeDiv('hud-screen-sub', 'PRESS ENTER'));
+    appendFooter();
+    screenEl.style.display = 'flex';
+  }
+
+  // selectedIndex highlights one of MENU_OPTIONS. Option elements carry a
+  // data-index attribute so a click/hover handler can map back to a choice.
+  function showMenu(selectedIndex = 0) {
+    screenEl.className = 'hud-screen menu';
+    screenEl.innerHTML = '';
+    screenEl.appendChild(makeDiv('hud-screen-title big', 'SENTINEL REMAKE'));
+    const menu = makeDiv('hud-menu');
+    MENU_OPTIONS.forEach((label, i) => {
+      const opt = makeDiv(`hud-menu-option${i === selectedIndex ? ' selected' : ''}`, label);
+      opt.dataset.index = String(i);
+      menu.appendChild(opt);
+    });
+    screenEl.appendChild(menu);
+    appendFooter();
+    screenEl.style.display = 'flex';
+  }
+
+  // display: the code text already formatted as XXXX-XXXX (with placeholders
+  // for not-yet-typed digits). error: optional message under the code.
+  function showCode(display, error = '') {
+    screenEl.className = 'hud-screen code';
+    screenEl.innerHTML = '';
+    screenEl.appendChild(makeDiv('hud-screen-title', 'ENTER CODE'));
+    screenEl.appendChild(makeDiv('hud-code-value', display));
+    screenEl.appendChild(makeDiv('hud-code-hint', 'DIGITS TO TYPE · BACKSPACE · ENTER CONFIRM · ESC BACK'));
+    screenEl.appendChild(makeDiv('hud-code-error', error));
+    appendFooter();
+    screenEl.style.display = 'flex';
+  }
+
+  return {
+    setEnergy, showMessage, setScanState, setScanned, setWatchers,
+    showScreen, showSplash, showMenu, showCode,
+    menuOptionCount: MENU_OPTIONS.length,
+  };
 }

@@ -44,13 +44,16 @@ function mulberry32(seed) {
   };
 }
 
-// ?seed=NNNNNNNN — an 8-digit landscape code. Valid codes map back to a
-// level (0000-9999); anything else starts at level 0000.
-function levelFromUrl() {
+// ?seed=NNNNNNNN — an 8-digit landscape code. A valid code (one that maps
+// back to a level 0000-9999) turns the URL into a deep link: after the splash
+// it launches that landscape directly, bypassing the menu. Missing/invalid
+// codes leave { present:false } and the game starts from the menu at 0000.
+function urlSeed() {
   const raw = new URLSearchParams(location.search).get('seed');
   const code = parseSeed(raw ?? '');
-  if (code === null) return 0;
-  return seedToLevel(code) ?? 0;
+  const lvl = code === null ? null : seedToLevel(code);
+  if (lvl === null) return { present: false, level: 0 };
+  return { present: true, level: lvl };
 }
 
 const canvas = document.getElementById('screen');
@@ -58,16 +61,30 @@ const ctx = canvas.getContext('2d');
 const input = createInput(canvas);
 const hud = createHud(document.getElementById('overlay'));
 const audio = createAudio();
-// Browsers only allow audio after a user gesture.
+const overlayEl = document.getElementById('overlay');
+// Browsers only allow audio after a user gesture. The splash/menu key & click
+// handlers below call audio.unlock() on every interaction (idempotent), so an
+// Enter on the splash is guaranteed to unlock before the game starts. These
+// once-listeners stay as a catch-all for gestures that bypass those handlers.
 window.addEventListener('keydown', () => audio.unlock(), { once: true });
 window.addEventListener('mousedown', () => audio.unlock(), { once: true });
 
-let state = 'title';          // 'title' | 'playing' | 'won' | 'complete' | 'dead'
+// State machine:
+//   'splash' -> 'menu' -> 'playing'         (menu START GAME)
+//   'menu'   -> 'code' -> 'playing'         (menu ENTER CODE, valid code)
+//   'playing' -> 'won' | 'complete' | 'dead' (Enter restarts, Esc -> 'menu')
+// A valid ?seed= deep-links 'splash' -> 'playing' directly.
+const seedLink = urlSeed();
+let state = 'splash';         // 'splash' | 'menu' | 'code' | 'playing' | 'won' | 'complete' | 'dead'
 let world = null;
 let game = null;
 let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
-let level = levelFromUrl();   // 0000-9999
+let level = seedLink.level;   // 0000-9999
 let nextLevel = null;         // set when a level is won
+
+// Menu / code-entry transient state.
+let menuSelection = 0;
+let codeDigits = '';          // up to 8 typed digits
 
 // ---- Level setup ----------------------------------------------------------
 // Terrain gives us bare tiles; the level itself (Sentinel on its pedestal on
@@ -209,6 +226,126 @@ function syncCamera() {
   camera.y = game.camera.eyeY;
 }
 
+// ---- Splash / menu / code navigation ----------------------------------
+// input.js only knows a handful of game keys (Enter -> 'start'), so menu
+// navigation gets its own keydown listener, active only outside 'playing'.
+// The game loop drains and ignores input.js actions while in these states.
+
+const MENU_COUNT = hud.menuOptionCount;
+
+// Partial code as XXXX-XXXX with '_' placeholders for untyped digits. Once all
+// 8 are in, formatSeed() gives the identical canonical form.
+function codeDisplay(digits) {
+  const padded = digits.padEnd(8, '_');
+  return `${padded.slice(0, 4)}-${padded.slice(4)}`;
+}
+
+function goToMenu() {
+  state = 'menu';
+  menuSelection = 0;
+  hud.showMenu(menuSelection);
+}
+
+function goToCode() {
+  state = 'code';
+  codeDigits = '';
+  hud.showCode(codeDisplay(codeDigits), '');
+}
+
+function leaveSplash() {
+  audio.unlock();
+  // Deep link: a valid ?seed= jumps straight into its landscape.
+  if (seedLink.present) { level = seedLink.level; newGame(); return; }
+  goToMenu();
+}
+
+function activateMenu(i) {
+  if (i === 0) { level = 0; newGame(); }   // START GAME — classic level 0000
+  else { goToCode(); }                     // ENTER CODE
+}
+
+function confirmCode() {
+  const code = parseSeed(codeDigits);
+  const lvl = code === null ? null : seedToLevel(code);
+  if (codeDigits.length !== 8 || lvl === null) {
+    hud.showCode(codeDisplay(codeDigits), 'INVALID CODE');
+    return;
+  }
+  level = lvl;
+  newGame();
+}
+
+function onMenuKeyDown(e) {
+  const code = e.code;
+  const isEnter = code === 'Enter' || code === 'NumpadEnter';
+
+  if (state === 'splash') {
+    audio.unlock();
+    if (isEnter) { e.preventDefault(); leaveSplash(); }
+    return;
+  }
+
+  if (state === 'menu') {
+    if (code === 'ArrowUp' || code === 'KeyW') {
+      e.preventDefault();
+      menuSelection = (menuSelection + MENU_COUNT - 1) % MENU_COUNT;
+      hud.showMenu(menuSelection);
+    } else if (code === 'ArrowDown' || code === 'KeyS') {
+      e.preventDefault();
+      menuSelection = (menuSelection + 1) % MENU_COUNT;
+      hud.showMenu(menuSelection);
+    } else if (isEnter) {
+      e.preventDefault();
+      activateMenu(menuSelection);
+    }
+    return;
+  }
+
+  if (state === 'code') {
+    if (code === 'Escape') { e.preventDefault(); goToMenu(); }
+    else if (isEnter) { e.preventDefault(); confirmCode(); }
+    else if (code === 'Backspace') {
+      e.preventDefault();
+      if (codeDigits.length) {
+        codeDigits = codeDigits.slice(0, -1);
+        hud.showCode(codeDisplay(codeDigits), '');
+      }
+    } else if (/^(Digit|Numpad)\d$/.test(code)) {
+      e.preventDefault();
+      if (codeDigits.length < 8) {
+        codeDigits += code.slice(-1);
+        hud.showCode(codeDisplay(codeDigits), '');
+      }
+    }
+    return;
+  }
+
+  // Bonus: Escape from an end screen returns to the menu (Enter still restarts).
+  if (state === 'won' || state === 'dead' || state === 'complete') {
+    if (code === 'Escape') { e.preventDefault(); goToMenu(); }
+  }
+}
+
+window.addEventListener('keydown', onMenuKeyDown);
+
+// Optional mouse support on the splash and menu screens.
+overlayEl.addEventListener('click', (e) => {
+  audio.unlock();
+  if (state === 'splash') { leaveSplash(); return; }
+  if (state === 'menu') {
+    const opt = e.target.closest('.hud-menu-option');
+    if (opt) { menuSelection = Number(opt.dataset.index); activateMenu(menuSelection); }
+  }
+});
+overlayEl.addEventListener('mousemove', (e) => {
+  if (state !== 'menu') return;
+  const opt = e.target.closest('.hud-menu-option');
+  if (opt) {
+    const i = Number(opt.dataset.index);
+    if (i !== menuSelection) { menuSelection = i; hud.showMenu(menuSelection); }
+  }
+});
+
 // ---- Loop -------------------------------------------------------------
 
 let last = performance.now();
@@ -236,8 +373,13 @@ function frame(now) {
     pick = world.pickTarget(ray.origin, ray.dir);
   }
 
-  // Discrete actions.
-  for (const action of input.pollActions()) {
+  // Discrete actions. Splash/menu/code run their own keydown listener, so
+  // here we just drain and ignore input.js's queue in those states.
+  const actions = input.pollActions();
+  if (state === 'splash' || state === 'menu' || state === 'code') {
+    // dropped on purpose
+  } else
+  for (const action of actions) {
     if (action === 'start') {
       if (state !== 'playing') {
         if (state === 'won' && nextLevel !== null) level = nextLevel;
@@ -329,7 +471,7 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-hud.showScreen('title');
+hud.showSplash();
 requestAnimationFrame(frame);
 
 // Debug hook for automated verification (harmless in production).
