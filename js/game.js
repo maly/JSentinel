@@ -327,8 +327,14 @@ export class Game {
     this._meanieCooldown = Math.max(0, (this._meanieCooldown ?? 0) - dt);
     let scan = 0;
 
-    for (const watcher of this.world.objects) {
-      if (!WATCHER_TYPES.has(watcher.type)) continue;
+    // Process the Sentinel last: if it and a sentry both drain the player on
+    // the same tick, both drains still apply, but the Sentinel's message is
+    // the one left on screen (the more dangerous foe takes precedence).
+    const watchers = this.world.objects
+      .filter((object) => WATCHER_TYPES.has(object.type))
+      .sort((a, b) => (a.type === 'sentinel' ? 1 : 0) - (b.type === 'sentinel' ? 1 : 0));
+
+    for (const watcher of watchers) {
 
       watcher._rotT = (watcher._rotT ?? 0) + dt;
       if (watcher._rotT >= SENTINEL_ROTATE_SECONDS) {
@@ -346,7 +352,7 @@ export class Game {
       if (watcher._drainT >= SENTINEL_DRAIN_SECONDS) {
         watcher._drainT = 0;
         if (baseVisible) {
-          this._drainPlayer();
+          this._drainPlayer(watcher.type);
           this._spawnTreeInFov(watcher);
         }
       }
@@ -400,9 +406,11 @@ export class Game {
     }
   }
 
-  _drainPlayer() {
+  // source: 'sentinel' | 'sentry' — which watcher performed the drain, so the
+  // message can name the actual culprit instead of always blaming the Sentinel.
+  _drainPlayer(source) {
     this.energy -= 1;
-    this._message('Sentinel drained energy');
+    this._message(source === 'sentry' ? 'A sentry drained energy' : 'Sentinel drained energy');
     this._event('drain');
     if (this.energy < 0) this._die('Energy depleted');
   }
