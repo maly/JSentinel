@@ -22,7 +22,7 @@ const ACTION_KEYS = {
   KeyR: 'robot',
   KeyQ: 'transfer',
   KeyH: 'hyperspace',
-  KeyU: 'uturn',
+  KeyE: 'uturn',
   Enter: 'start',
 };
 
