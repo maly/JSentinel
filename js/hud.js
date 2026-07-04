@@ -214,6 +214,19 @@ const STYLE = `
   100% { box-shadow: inset 0 0 40px 8px rgba(255, 30, 30, 0.25), inset 0 0 0 4px rgba(255, 30, 30, 0.35); }
 }
 
+/* ---------- hyperspace / transfer flash ---------- */
+.hud-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center,
+    rgba(233, 255, 238, 0.95) 0%,
+    rgba(190, 255, 205, 0.85) 55%,
+    rgba(150, 240, 175, 0.7) 100%);
+  opacity: 0;
+  will-change: opacity;
+}
+
 /* ---------- full-canvas screens (title / won / dead) ---------- */
 .hud-screen {
   position: absolute;
@@ -477,12 +490,17 @@ export function createHud(overlayEl) {
   scanVignette.className = 'hud-scan-vignette';
   overlayEl.appendChild(scanVignette);
 
+  const flashEl = document.createElement('div');
+  flashEl.className = 'hud-flash';
+  overlayEl.appendChild(flashEl);
+
   const screenEl = document.createElement('div');
   screenEl.className = 'hud-screen';
   screenEl.style.display = 'none';
   overlayEl.appendChild(screenEl);
 
   let messageTimer = null;
+  let flashTimer = null;
   let scanState = 0;
   let lastSentinelAlive = null;
   let lastSentryCount = null;
@@ -594,6 +612,24 @@ export function createHud(overlayEl) {
   // Deprecated: thin alias over setScanState for backward compatibility.
   function setScanned(isScanned) {
     setScanState(isScanned ? 2 : 0);
+  }
+
+  // Full-screen greenish-white flash for teleport events. 'hyperspace' is a
+  // strong, longer flash; 'transfer' is a softer, shorter one. Snaps to peak
+  // over ~120ms, then fades out (400ms hyperspace / 280ms transfer).
+  function flash(kind = 'hyperspace') {
+    const strong = kind !== 'transfer';
+    const peak = strong ? 0.85 : 0.42;
+    const inMs = 120;
+    const outMs = strong ? 400 : 280;
+    if (flashTimer) { clearTimeout(flashTimer); flashTimer = null; }
+    flashEl.style.transition = `opacity ${inMs}ms ease-out`;
+    flashEl.style.opacity = String(peak);
+    flashTimer = setTimeout(() => {
+      flashEl.style.transition = `opacity ${outMs}ms ease-out`;
+      flashEl.style.opacity = '0';
+      flashTimer = null;
+    }, inMs);
   }
 
   // `lines`: optional array of extra info strings rendered between the title
@@ -749,7 +785,7 @@ export function createHud(overlayEl) {
   }
 
   return {
-    setEnergy, showMessage, setScanState, setScanned, setWatchers,
+    setEnergy, showMessage, setScanState, setScanned, setWatchers, flash,
     showScreen, showSplash, showMenu, showCode,
     showSettings, setSettingValue, setSettingSelection,
     menuOptionCount: MENU_OPTIONS.length,

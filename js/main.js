@@ -17,6 +17,18 @@ const LOGIC_HZ = 10;
 const YAW_SPEED = 1.2;        // rad/s
 const YAW_SPEED_FAST = 3.0;
 const PITCH_LIMIT = Math.PI / 3;
+// Jump-turn easing (u-turn / transfer). Held-key rotation is NEVER eased (that
+// would add input lag) — only discrete target changes tween. rate ~10 => the
+// 180° u-turn sweeps in ~250ms. angleDiff picks the shortest direction.
+const YAW_TWEEN_RATE = 10;
+// Drain shake: exp decay ~0.5s (rate 5 => e^-2.5 after 0.5s). Render-only.
+const SHAKE_DECAY = 5;
+function angleDiff(from, to) {
+  let d = (to - from) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
 const BOULDER_COUNT = 2;
 const START_ENERGY = 10;
 
@@ -91,7 +103,10 @@ const seedLink = urlSeed();
 let state = 'splash';         // 'splash' | 'menu' | 'code' | 'playing' | 'won' | 'complete' | 'dead' | 'settings'
 let world = null;
 let game = null;
-let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
+let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, targetYaw: 0 };
+// Jump-turn tween + drain-shake state (render/camera only, never logic/pick).
+let yawTweening = false;
+let shake = 0;
 let level = seedLink.level;   // 0000-9999
 let nextLevel = null;         // set when a level is won
 
@@ -228,6 +243,9 @@ function newGame() {
   game = new Game(world, { x: start.x, z: start.z, energy: START_ENERGY });
   // Face the Sentinel on spawn (math3d yaw convention: 0 = +Z, dir.x = sin yaw).
   camera.yaw = Math.atan2(sentinel.x - start.x, sentinel.z - start.z);
+  camera.targetYaw = camera.yaw;   // spawn snaps (no start-of-level spin)
+  yawTweening = false;
+  shake = 0;
   camera.pitch = 0;
   syncCamera();
   state = 'playing';
@@ -512,10 +530,28 @@ function frame(now) {
   // View rotation every frame for smoothness.
   if (state === 'playing') {
     const speed = input.held.fast ? YAW_SPEED_FAST : YAW_SPEED;
-    if (input.held.yawLeft) camera.yaw -= speed * dt;
-    if (input.held.yawRight) camera.yaw += speed * dt;
+    if (input.held.yawLeft || input.held.yawRight) {
+      // Direct, un-eased response to held keys (no input lag). Any manual turn
+      // cancels an in-progress jump-turn tween so the two never fight.
+      if (input.held.yawLeft) camera.yaw -= speed * dt;
+      if (input.held.yawRight) camera.yaw += speed * dt;
+      camera.targetYaw = camera.yaw;
+      yawTweening = false;
+    }
     if (input.held.pitchUp) camera.pitch = Math.min(PITCH_LIMIT, camera.pitch + speed * dt);
     if (input.held.pitchDown) camera.pitch = Math.max(-PITCH_LIMIT, camera.pitch - speed * dt);
+
+    // Ease discrete jump-turns (u-turn / transfer) toward targetYaw. Applied
+    // BEFORE the pick below, so picking uses the actual (tweened) camera.
+    if (yawTweening) {
+      const d = angleDiff(camera.yaw, camera.targetYaw);
+      if (Math.abs(d) < 0.001) {
+        camera.yaw = camera.targetYaw;
+        yawTweening = false;
+      } else {
+        camera.yaw += d * (1 - Math.exp(-dt * YAW_TWEEN_RATE));
+      }
+    }
   }
 
   // Current pick (crosshair target) — recomputed every frame so the renderer
@@ -553,12 +589,18 @@ function frame(now) {
     }
     if (state !== 'playing') continue;
     if (action === 'uturn') {
-      camera.yaw += Math.PI;
+      // Jump-turn 180°, eased. Blocked while a tween is already in flight.
+      if (!yawTweening) {
+        camera.targetYaw = camera.yaw + Math.PI;
+        yawTweening = true;
+      }
       continue;
     }
     game.doAction(action, pick);
     if (game.pendingFacing !== null) {
-      camera.yaw = game.pendingFacing;   // face the shell you transferred from
+      // Face the shell you transferred from — eased jump-turn to it.
+      camera.targetYaw = game.pendingFacing;
+      yawTweening = true;
       game.pendingFacing = null;
     }
     syncCamera();
@@ -585,6 +627,10 @@ function frame(now) {
     }
     for (const ev of game.events.splice(0)) {
       audio.play(ev);
+      // Visual feedback for teleport / drain events.
+      if (ev === 'hyperspace') hud.flash('hyperspace');
+      else if (ev === 'transfer') hud.flash('transfer');
+      else if (ev === 'drain') shake = Math.max(shake, 0.6);
     }
     // Scan-state rising edges get their own warning sounds.
     if (game.scanState !== lastScanState) {
@@ -621,12 +667,29 @@ function frame(now) {
     }
   }
 
+  // Drain shake: a render-ONLY yaw/pitch jitter with exponential decay. It must
+  // never leak into camera (pick/logic already used the true camera above), so
+  // it is applied to a throwaway copy passed to render.
+  let renderCam = camera;
+  if (shake > 0.001) {
+    shake *= Math.exp(-dt * SHAKE_DECAY);
+    renderCam = {
+      ...camera,
+      yaw: camera.yaw + (Math.random() - 0.5) * 0.01 * shake,
+      pitch: camera.pitch + (Math.random() - 0.5) * 0.01 * shake,
+    };
+  } else {
+    shake = 0;
+  }
+
   // Render.
   if (world) {
-    render(ctx, world, camera, {
+    render(ctx, world, renderCam, {
       crosshair: state === 'playing',
       cursor: input.cursor,
       pickTile: pick ? pick.tile : null,
+      pick,
+      time: now / 1000,
       skipObjectId: game ? game.playerShellId : null,
     });
   } else {

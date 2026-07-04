@@ -64,20 +64,45 @@
     background: #000;
   }
 
-  /* subtle scanline overlay for retro CRT feel */
+  /* subtle scanline + vignette + grille overlay for retro CRT feel.
+     Layered top-to-bottom: radial vignette (edges darken ~0.25 after the 0.5
+     layer opacity), a faint 1px vertical grille, then the horizontal scanlines.
+     A very gentle stepped opacity flicker (max ~3% relative) adds CRT life while
+     staying well under photosensitivity thresholds. */
   #stage::after {
     content: "";
     position: absolute;
     inset: 0;
     pointer-events: none;
-    background: repeating-linear-gradient(
-      to bottom,
-      rgba(0, 0, 0, 0) 0px,
-      rgba(0, 0, 0, 0) 2px,
-      rgba(0, 0, 0, 0.08) 3px
-    );
+    background:
+      radial-gradient(ellipse at 50% 50%,
+        rgba(0, 0, 0, 0) 60%,
+        rgba(0, 0, 0, 0.5) 100%),
+      repeating-linear-gradient(
+        to right,
+        rgba(0, 0, 0, 0.03) 0px,
+        rgba(0, 0, 0, 0.03) 1px,
+        rgba(0, 0, 0, 0) 1px,
+        rgba(0, 0, 0, 0) 3px
+      ),
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.08) 3px
+      );
     mix-blend-mode: multiply;
     opacity: 0.5;
+    animation: crt-flicker 3.2s steps(8, end) infinite;
+  }
+
+  @keyframes crt-flicker {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 0.515; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #stage::after { animation: none; }
   }
 
   #overlay {

@@ -15,7 +15,7 @@
 //   6. Crosshair.
 
 import {
-  VIEW_W, VIEW_H, CX, CY, NEAR, HEIGHT_SCALE,
+  VIEW_W, VIEW_H, CX, CY, NEAR, FOCAL, HEIGHT_SCALE,
   makeView, projectView, vsub, vcross, vnorm, vdot,
 } from './math3d.js';
 
@@ -105,6 +105,20 @@ function shade(rgb, brightness) {
 }
 const rgbStr = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
 
+// Lerp two rgb arrays, rounding to integers (canvas rgb() wants ints).
+function lerpRgb(a, b, t) {
+  return [
+    Math.round(a[0] + (b[0] - a[0]) * t),
+    Math.round(a[1] + (b[1] - a[1]) * t),
+    Math.round(a[2] + (b[2] - a[2]) * t),
+  ];
+}
+
+// Depth fog: polygons fade toward the palette's horizon colour with distance.
+// fogT = 1 - exp(-depth * FOG_K), capped so the far checkerboard stays legible.
+const FOG_K = 0.02;
+const FOG_CAP = 0.5;
+
 // Brightness for a world-space polygon given its vertices (CCW from outside).
 function faceBrightness(worldVerts, flipToUp = false) {
   const n0 = vcross(vsub(worldVerts[1], worldVerts[0]), vsub(worldVerts[2], worldVerts[0]));
@@ -115,13 +129,51 @@ function faceBrightness(worldVerts, flipToUp = false) {
 }
 
 // ---- Sky ----------------------------------------------------------------
-function drawSky(ctx) {
+function drawSky(ctx, camera) {
   const pal = activePalette();
   const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
   g.addColorStop(0, rgbStr(pal.skyTop));
   g.addColorStop(1, rgbStr(pal.skyHorizon));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+
+  // Screen-space horizon line (view y = 0 at infinity). Tracks pitch so the sun
+  // and haze feel anchored to the world, not pasted onto the viewport.
+  const pitch = camera ? camera.pitch : 0;
+  const horizonY = CY + FOCAL * Math.tan(pitch);
+  const hz = pal.skyHorizon;
+
+  // Low sun, placed by the world-space LIGHT bearing so it sits opposite the
+  // shadows and slides with yaw. Projection-consistent x = CX + FOCAL*tan(dyaw)
+  // (matches makeView), only drawn while the sun is in the front hemisphere.
+  const sunYaw = Math.atan2(LIGHT.x, LIGHT.z);
+  let dyaw = sunYaw - (camera ? camera.yaw : 0);
+  dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw));
+  if (Math.abs(dyaw) < 1.4) {
+    const sunX = CX + FOCAL * Math.tan(dyaw);
+    const sunY = horizonY - 30;              // low, just above the horizon
+    const sunCore = lerpRgb(hz, [255, 244, 214], 0.7);
+    ctx.save();
+    // Concentric skyHorizon-tinted glow (outer faint), then the warm disk.
+    ctx.fillStyle = rgbStr(hz);
+    ctx.globalAlpha = 0.09; ctx.beginPath(); ctx.arc(sunX, sunY, 50, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.14; ctx.beginPath(); ctx.arc(sunX, sunY, 30, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 0.95; ctx.fillStyle = rgbStr(sunCore);
+    ctx.beginPath(); ctx.arc(sunX, sunY, 14, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Horizontal haze band hugging the horizon (gradient up from the horizon).
+  const hazeH = 46;
+  const hazeTop = horizonY - hazeH;
+  if (horizonY > 0 && hazeTop < VIEW_H) {
+    const haze = ctx.createLinearGradient(0, hazeTop, 0, horizonY);
+    haze.addColorStop(0, `rgba(${hz[0]},${hz[1]},${hz[2]},0)`);
+    haze.addColorStop(1, `rgba(${hz[0]},${hz[1]},${hz[2]},0.5)`);
+    ctx.fillStyle = haze;
+    ctx.fillRect(0, hazeTop, VIEW_W, hazeH);
+  }
+
   // Subtle horizontal bands for the retro look.
   ctx.globalAlpha = 0.06;
   ctx.fillStyle = '#ffffff';
@@ -191,8 +243,14 @@ function buildPoly(list, view, worldVerts, fillCol, cull, strokeCol = null, dept
     // (screen y is down). Cull the back faces.
     if (signedArea2D(pts) > 0) return;
   }
-  const stroke = strokeCol || shade(fillCol, 0.62);
-  list.push({ pts, depth, fill: rgbStr(fillCol), stroke: rgbStr(stroke), alpha });
+  // Depth fog: lerp both fill and stroke toward the horizon colour. Applied here
+  // so it covers terrain, objects, contact shadows AND the pick highlight alike.
+  const fogCol = activePalette().skyHorizon;
+  const fogT = Math.min(FOG_CAP, 1 - Math.exp(-depth * FOG_K));
+  const fillFog = lerpRgb(fillCol, fogCol, fogT);
+  const strokeBase = strokeCol || shade(fillCol, 0.62);
+  const strokeFog = lerpRgb(strokeBase, fogCol, fogT);
+  list.push({ pts, depth, fill: rgbStr(fillFog), stroke: rgbStr(strokeFog), alpha });
 }
 
 // ---- Terrain ------------------------------------------------------------
@@ -205,7 +263,7 @@ function toward(rgb, white, t) {
   ];
 }
 
-function collectTerrain(list, view, world, pickTile) {
+function collectTerrain(list, view, world, pickTile, pickPulse = 0.35) {
   const tiles = world.tiles;
   const size = tiles.length;
   const pal = activePalette();
@@ -236,7 +294,7 @@ function collectTerrain(list, view, world, pickTile) {
       // Pick highlight: the tile under the crosshair reads brighter with a
       // lighter outline so the player can see what they are targeting.
       const picked = (x === pkx && z === pkz);
-      if (picked) base = toward(base, 255, 0.35);
+      if (picked) base = toward(base, 255, pickPulse);
       const strokeShade = picked ? 1.15 : 0.62;
 
       // Triangulation: the game's pick/LOS sampling (world.js terrainYAt)
@@ -537,6 +595,25 @@ function dissolveAlpha(d) {
   return Math.ceil(d * 4) / 4;
 }
 
+// Contact shadow: a flat dark octagon just above the object's resting surface,
+// scaled by the object footprint. Sorted like terrain (depthMode 'max') so a
+// large ground tile paints before it, and its own compact max-depth keeps it
+// above that tile while the taller object (sorted nearer) paints over the top.
+// On steep slopes the flat disk floats slightly — tolerated, per spec.
+const SHADOW_COL = [6, 8, 12];
+function emitContactShadow(list, view, cx, cz, baseY, radius, alpha) {
+  const seg = 8;
+  const off = Math.PI / seg;
+  const y = baseY + 0.02;
+  const verts = new Array(seg);
+  for (let i = 0; i < seg; i++) {
+    const a = off + (i / seg) * Math.PI * 2;
+    verts[i] = { x: cx + Math.cos(a) * radius, y, z: cz + Math.sin(a) * radius };
+  }
+  // No backface cull (flat disk), stroke == fill so there is no visible ring.
+  buildPoly(list, view, verts, SHADOW_COL, false, SHADOW_COL, 'max', alpha);
+}
+
 // Emit one world object (or ghost effect) into the poly list. Reads o.dissolve
 // (undefined = solid); objects with dissolve <= 0 are skipped by the caller.
 function emitObject(list, view, world, o) {
@@ -556,6 +633,9 @@ function emitObject(list, view, world, o) {
     baseY = centerH * HEIGHT_SCALE + (o.stackIndex || 0) * BOULDER_H;
   }
   const px = o.x + 0.5, pz = o.z + 0.5;
+  // Contact shadow on the resting surface, fading with the object's dissolve.
+  const footprint = (o.radius ?? 0.35) * 1.05;
+  emitContactShadow(list, view, px, pz, baseY, footprint, 0.25 * alpha);
   const yaw = o.rotY ?? o.facing ?? 0;
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   for (const face of mesh) {
@@ -603,25 +683,50 @@ function localFaceBrightness(v, yaw) {
 }
 
 // ---- Crosshair ----------------------------------------------------------
-function drawCrosshair(ctx, cx = CX, cy = CY) {
+// Classify what the crosshair is over so it can recolour: an interactive object
+// (absorb/transfer target) reads green, a watcher (Sentinel/sentry = danger)
+// reads pulsing red, everything else stays neutral white.
+function crosshairMode(pick) {
+  if (!pick || !pick.object) return 'neutral';
+  const t = pick.object.type;
+  if (t === 'sentinel' || t === 'sentry') return 'danger';
+  if (t === 'tree' || t === 'boulder' || t === 'robot' || t === 'meanie') return 'interactive';
+  return 'neutral';
+}
+
+function drawCrosshair(ctx, cx = CX, cy = CY, mode = 'neutral', pulse = 0.3) {
   const x = Math.round(cx), y = Math.round(cy);
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  let color = 'rgba(255,255,255,0.85)';
+  let gap = 2, len = 7;
+  if (mode === 'interactive') {
+    color = 'rgba(130,255,180,0.95)';
+    gap = 3; len = 8;
+  } else if (mode === 'danger') {
+    color = 'rgba(255,70,55,0.96)';
+    // Danger arms breathe outward with the shared pick pulse.
+    gap = 3 + Math.round(pulse * 6); len = gap + 6;
+  }
+  ctx.strokeStyle = color;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(x - 7, y + 0.5); ctx.lineTo(x - 2, y + 0.5);
-  ctx.moveTo(x + 2, y + 0.5); ctx.lineTo(x + 7, y + 0.5);
-  ctx.moveTo(x + 0.5, y - 7); ctx.lineTo(x + 0.5, y - 2);
-  ctx.moveTo(x + 0.5, y + 2); ctx.lineTo(x + 0.5, y + 7);
+  ctx.moveTo(x - len, y + 0.5); ctx.lineTo(x - gap, y + 0.5);
+  ctx.moveTo(x + gap, y + 0.5); ctx.lineTo(x + len, y + 0.5);
+  ctx.moveTo(x + 0.5, y - len); ctx.lineTo(x + 0.5, y - gap);
+  ctx.moveTo(x + 0.5, y + gap); ctx.lineTo(x + 0.5, y + len);
   ctx.stroke();
 }
 
 // ---- Main entry ---------------------------------------------------------
 export function render(ctx, world, camera, uiState = {}) {
-  drawSky(ctx);
+  drawSky(ctx, camera);
   const view = makeView(camera);
 
+  // Shared pick pulse (also drives the danger crosshair): 0.25 + 0.12*sin(4t).
+  const time = uiState.time ?? 0;
+  const pickPulse = 0.25 + 0.12 * Math.sin(time * 4);
+
   const list = [];
-  collectTerrain(list, view, world, uiState.pickTile || null);
+  collectTerrain(list, view, world, uiState.pickTile || null, pickPulse);
   collectObjects(list, view, world, uiState.skipObjectId ?? null);
 
   // Painter's algorithm: draw far polygons first.
@@ -644,6 +749,12 @@ export function render(ctx, world, camera, uiState = {}) {
   }
 
   if (uiState.crosshair) {
-    drawCrosshair(ctx, uiState.cursor?.x ?? CX, uiState.cursor?.y ?? CY);
+    drawCrosshair(
+      ctx,
+      uiState.cursor?.x ?? CX,
+      uiState.cursor?.y ?? CY,
+      crosshairMode(uiState.pick),
+      pickPulse,
+    );
   }
 }
