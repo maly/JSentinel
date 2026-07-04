@@ -152,6 +152,12 @@ export class Game {
 
   _absorb(pickResult) {
     if (!pickResult) return false;
+    // Original rule: once the Sentinel is absorbed, no more energy may be
+    // absorbed from the landscape (creating objects still works).
+    if (this._sentinelAbsorbed) {
+      this._message('The landscape yields no more energy');
+      return false;
+    }
     // As in the original: absorption targets the SQUARE the object stands on.
     // Hitting the object's body is forgiven when the ray, continued past it,
     // would land in that same square — a near-miss of the base still counts.

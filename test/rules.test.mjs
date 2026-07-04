@@ -219,6 +219,20 @@ function testTransferOnlyIntoRobots() {
   assert.equal(game.camera.z, 0);
 }
 
+function testNoAbsorbAfterSentinel() {
+  const world = new World(makeTiles());
+  const game = new Game(world, { x: 0, z: 0, energy: 20 });
+  world.addObject({ type: 'sentinel', x: 3, z: 0 });
+  const tree = world.addObject({ type: 'tree', x: 5, z: 5 });
+
+  assert.equal(game.doAction('absorb', { tile: { x: 3, z: 0 }, object: null, point: { x: 3.5, y: 0, z: 0.5 } }), true);
+  // After the Sentinel is absorbed the landscape yields no more energy...
+  assert.equal(game.doAction('absorb', { tile: { x: 5, z: 5 }, object: null, point: { x: 5.5, y: 0, z: 5.5 } }), false);
+  assert.equal(world.objects.includes(tree), true);
+  // ...but creating objects still works as normal.
+  assert.equal(game.doAction('robot', { tile: { x: 3, z: 0 } }), true);
+}
+
 function testWinConditionSequence() {
   const world = new World(makeTiles());
   const game = new Game(world, { x: 0, z: 0, energy: 20 });
@@ -244,6 +258,7 @@ testAbsorbTargetsSquareTopObject();
 testSentryActsAsWatcher();
 testSentryAbsorbYieldsFour();
 testTransferOnlyIntoRobots();
+testNoAbsorbAfterSentinel();
 testWinConditionSequence();
 
 console.log('rules.test.mjs: all tests passed');
