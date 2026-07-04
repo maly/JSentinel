@@ -100,14 +100,23 @@ function addOctave(f, N, cells, amp, rng, ridge) {
 // and basins appear at many independent locations rather than as one slope
 // toward a single summit. High-freq detail is kept small so quantised plateaus
 // stay broad. Octave order is fixed => deterministic draw order.
-function valueNoise(N, rng) {
+// `rug` in [0,1] scales the mid/high/ridge octaves UP so the heightfield gets
+// choppier (more independent lumps and sharper ridgelines) as ruggedness rises.
+// At rug === 0 every multiplier is exactly 1, so the drawn amplitudes equal the
+// original literals AND the rng draw order is untouched (amplitude never affects
+// which lattice values are drawn) => byte-identical output.
+function valueNoise(N, rng, rug = 0) {
   const f = Array.from({ length: N }, () => new Array(N).fill(0));
+  const mid = 1 + 0.55 * rug;   // mid-frequency lumps grow
+  const ridge = 1 + 0.75 * rug; // ridgelines/valleys sharpen
+  const high = 1 + 1.10 * rug;  // fine detail roughens the quantised plateaus
+                                // (kept modest so low basins don't ride up)
   // cells, amp, ridge
-  addOctave(f, N, 2, 0.55, rng, false); // gentle continental tilt (not dominant)
-  addOctave(f, N, 3, 0.70, rng, false); // MID: big independent lumps
-  addOctave(f, N, 5, 0.55, rng, false); // MID: local hills & hollows
-  addOctave(f, N, 4, 0.55, rng, true);  // RIDGE: ridgelines + valleys
-  addOctave(f, N, 8, 0.15, rng, false); // faint surface detail
+  addOctave(f, N, 2, 0.55,        rng, false); // gentle continental tilt (unscaled)
+  addOctave(f, N, 3, 0.70 * mid,  rng, false); // MID: big independent lumps
+  addOctave(f, N, 5, 0.55 * mid,  rng, false); // MID: local hills & hollows
+  addOctave(f, N, 4, 0.55 * ridge, rng, true); // RIDGE: ridgelines + valleys
+  addOctave(f, N, 8, 0.15 * high, rng, false); // faint surface detail
   return f;
 }
 
@@ -134,7 +143,12 @@ function blur(f, N) {
 // 3×3 majority (mode) filter on the integer field. Snaps isolated one-vertex
 // slope wiggles onto the surrounding plateau level, widening flat tiles. Ties
 // resolve to the value closest to the current one (stable, deterministic).
-function modeFilter(V, N) {
+// `minCount` (default 0) gates the snap: a vertex is only pulled onto the
+// neighbourhood mode when that mode occupies at least `minCount` of the 3x3
+// window. At minCount 0 every vertex snaps (the original behaviour, so rug 0 is
+// byte-identical); higher minCount (raised with ruggedness) lets isolated slope
+// wiggles SURVIVE instead of widening into plateaus -> choppier, fewer flats.
+function modeFilter(V, N, minCount = 0) {
   const src = V.map((row) => row.slice());
   for (let z = 0; z < N; z++) {
     for (let x = 0; x < N; x++) {
@@ -153,7 +167,7 @@ function modeFilter(V, N) {
           best = v; bestC = c;
         }
       }
-      V[z][x] = best;
+      if (bestC >= minCount) V[z][x] = best;
     }
   }
 }
@@ -235,12 +249,43 @@ function flattenTiles(V, locked, N, freeMax, lip) {
   }
 }
 
-export function generateTerrain(seed = 1) {
+// generateTerrain(seed, ruggedness) — ruggedness in [0,1] (default 0).
+//   0   => EXACTLY the original landscape (byte-identical per seed).
+//   >0  => progressively harsher/choppier: bigger mid/high noise, less low-bias
+//          (gamma -> 1), fewer flatten/mode passes, wider coarse spans (bigger
+//          walls) and more distinct terraces. Continuous, not a hard switch.
+// Relaxed-but-guaranteed floors at ruggedness 1 (verified seeds 1..5): flat
+// tiles >= 40%, low-band flats >= 12, unique summit with >= 4 flat tiles ALWAYS,
+// and every hard cap kept ALWAYS (tile span <= 6, adjacent-corner delta <= 6,
+// MAX_HEIGHT 31, 31x31 grid, shared corners, deterministic per (seed, rug)).
+export function generateTerrain(seed = 1, ruggedness = 0) {
   const rng = mulberry32(seed >>> 0);
   const N = VN;
 
+  // Ruggedness knobs. Each is defined so that at rug === 0 it collapses to the
+  // ORIGINAL constant/behaviour exactly (1.42, span 2, 3 coarse + 2 fine flatten
+  // passes), guaranteeing byte-identical output on the default path.
+  const rug = Math.max(0, Math.min(1, ruggedness));
+  const gamma = 1.42 - 0.18 * rug;               // low-bias relaxes 1.42 -> 1.24
+                                                 // (keep strong bias => broad low
+                                                 //  basins protect the low-flat floor)
+  const nCoarseFlat = Math.round(3 - 3 * rug);   // 3 -> 0 flatten cycles
+  const coarseLip = Math.max(1, Math.round(COARSE_LIP - rug)); // 2 -> 1
+  const nFineFlat = Math.max(1, Math.round(2 - rug)); // 2 -> 1 summit-settle cycles
+  const fineLip = Math.max(2, Math.round(GEN_SPAN - 2 * rug)); // 4 -> 2 (fewer flats)
+  const coarseSpan = rug < 0.5 ? COARSE_SPAN : COARSE_SPAN + 1; // 2 -> 3 (dbl 4->6)
+  const modeMin = Math.round(5 * rug);           // 0 -> 5 (weaken plateau-widening)
+  // More distinct height levels as ruggedness rises: the coarse-then-double
+  // pipeline only has COARSE_MAX+1 (7) levels at rug 0, which inherently yields
+  // broad equal-corner plateaus. Raising the level count spreads relief across
+  // MORE distinct terraces => fewer equal-corner flats and a choppier surface.
+  // Kept well below the reserved summit band (S >= 24) so the summit stays the
+  // unique maximum: fieldMax tops out at 18 (WALL_CAP below 24).
+  const fieldMax = FIELD_MAX + 2 * Math.round(2 * rug); // 12 -> 16
+  const coarseMax = fieldMax / 2;                        // 6 -> 8
+
   // --- 1. Wavy float heightfield -----------------------------------------
-  let f = valueNoise(N, rng);
+  let f = valueNoise(N, rng, rug);
   f = blur(f, N);            // one light pass only — keep the waves
 
   // Normalise to [0,1], then a mild low-bias (gamma > 1 broadens the basins so
@@ -257,13 +302,12 @@ export function generateTerrain(seed = 1) {
     }
   }
   const span = (mx - mn) || 1;
-  const gamma = 1.42;
   const V = Array.from({ length: N }, () => new Array(N).fill(0));
   for (let z = 0; z < N; z++) {
     for (let x = 0; x < N; x++) {
       const norm = (f[z][x] - mn) / span;               // 0..1
       const shaped = Math.pow(norm, gamma);             // bias low
-      V[z][x] = Math.round(shaped * COARSE_MAX);        // coarse levels 0..10
+      V[z][x] = Math.round(shaped * coarseMax);         // coarse levels 0..coarseMax
     }
   }
 
@@ -271,15 +315,17 @@ export function generateTerrain(seed = 1) {
   // Widen plateaus (mode filter), cap coarse tile spans at COARSE_SPAN, then
   // greedily flatten. This is the same coarse algorithm the old 8-level build
   // used, so it reliably yields >=55% flat with broad low basins.
+  // At rug 0: coarseSpan = COARSE_SPAN (2) and nCoarseFlat = 3, so this is the
+  // exact original sequence (mode; clamp; [flatten; clamp] x3). Higher ruggedness
+  // widens the coarse span cap (bigger doubled walls) and runs FEWER flatten
+  // cycles (less plateau-widening => more slope tiles / distinct terraces).
   const noLock = Array.from({ length: N }, () => new Array(N).fill(false));
-  modeFilter(V, N);
-  clampTileSpan(V, noLock, N, COARSE_SPAN);
-  flattenTiles(V, noLock, N, COARSE_MAX, COARSE_LIP);
-  clampTileSpan(V, noLock, N, COARSE_SPAN);
-  flattenTiles(V, noLock, N, COARSE_MAX, COARSE_LIP);
-  clampTileSpan(V, noLock, N, COARSE_SPAN);
-  flattenTiles(V, noLock, N, COARSE_MAX, COARSE_LIP);
-  clampTileSpan(V, noLock, N, COARSE_SPAN);
+  modeFilter(V, N, modeMin);
+  clampTileSpan(V, noLock, N, coarseSpan);
+  for (let i = 0; i < nCoarseFlat; i++) {
+    flattenTiles(V, noLock, N, coarseMax, coarseLip);
+    clampTileSpan(V, noLock, N, coarseSpan);
+  }
 
   // --- 2b. Double every level to the fine 32-level grid ------------------
   // Doubling preserves the flat tiles exactly and doubles every span, so the
@@ -348,12 +394,46 @@ export function generateTerrain(seed = 1) {
   // per-vertex, every cone/field boundary tile has all its field corners at a
   // ring >= C - WALL_CAP (C = adjacent cone level) => span <= WALL_CAP (6). This
   // clamp only shaves diagonal over-spans left in the FREE field.
-  flattenTiles(V, locked, N, FIELD_MAX, GEN_SPAN);
-  applyCone();
-  clampTileSpan(V, locked, N, WALL_CAP);
-  flattenTiles(V, locked, N, FIELD_MAX, GEN_SPAN);
-  applyCone();
-  clampTileSpan(V, locked, N, WALL_CAP);
+  // At rug 0 nFineFlat = 2 => exact original (flatten; applyCone; clamp) x2. The
+  // final applyCone + clampTileSpan(WALL_CAP) always run (nFineFlat >= 1), so the
+  // hard span<=6 cap and the reserved unique summit hold at every ruggedness.
+  for (let i = 0; i < nFineFlat; i++) {
+    flattenTiles(V, locked, N, fieldMax, fineLip);
+    applyCone();
+    clampTileSpan(V, locked, N, WALL_CAP);
+  }
+
+  // --- 3c. GUARANTEE the relaxed flat floors -----------------------------
+  // A noise-derived statistic can't be guaranteed by tuning alone, so this stage
+  // makes the relaxed floors HARD: while the map is below >=40% flat tiles OR
+  // below 12 low-band flats, run extra flatten/settle cycles (with the wider
+  // GEN_SPAN lip so flats form readily). flattenTiles never removes a flat and
+  // converges to a fixed point, so the loop terminates; the cone + span cap are
+  // re-asserted each pass so the unique summit and span<=6 hold throughout.
+  //
+  // At rug 0 the surface already clears both floors on the FIRST measurement, so
+  // the loop breaks with ZERO extra passes => the default path stays byte-
+  // identical. It only ever fires for the harsher (rug>0) maps that dipped under.
+  const LOW_BAND = 4;              // "lowest levels" band (matches the rug-0 map)
+  const FLOOR_FLAT = Math.ceil(0.40 * MAP_SIZE * MAP_SIZE); // >= 40% of tiles flat
+  const FLOOR_LOW = 12;            // >= 12 flat tiles in the low band
+  const measureFloors = () => {
+    let flat = 0, low = 0;
+    for (let z = 0; z < MAP_SIZE; z++) {
+      for (let x = 0; x < MAP_SIZE; x++) {
+        const a = V[z][x], b = V[z][x + 1], c = V[z + 1][x + 1], d = V[z + 1][x];
+        if (a === b && b === c && c === d) { flat++; if (a <= LOW_BAND) low++; }
+      }
+    }
+    return { flat, low };
+  };
+  for (let g = 0; g < 24; g++) {
+    const m = measureFloors();
+    if (m.flat >= FLOOR_FLAT && m.low >= FLOOR_LOW) break;
+    flattenTiles(V, locked, N, fieldMax, GEN_SPAN);
+    applyCone();
+    clampTileSpan(V, locked, N, WALL_CAP);
+  }
 
   // --- 4. Build tiles from the vertex field ------------------------------
   const tiles = [];

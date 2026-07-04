@@ -24,10 +24,50 @@ import {
 export const BOULDER_H = 1.0;
 
 // ---- Palette ------------------------------------------------------------
+// Legacy look (kept as the exact source of PALETTES[0] so index 0 is byte-for-
+// byte the original green landscape / blue sky).
 const SKY_TOP = [0x22, 0x3A, 0x9C];
 const SKY_HORIZON = [0x6E, 0x92, 0xE6];
 const GREEN_A = [0x55, 0xBB, 0x55];   // checkerboard light green
 const GREEN_B = [0x3D, 0x8B, 0x3D];   // checkerboard dark green
+
+// Per-level landscape palettes, in the spirit of the original Sentinel's ZX/C64
+// colour cycling. Each: { name, skyTop, skyHorizon, tileA, tileB } as [r,g,b].
+//   * index 0 IS the current look (references the legacy constants above);
+//   * tileA/tileB are clearly distinct so the checkerboard reads; slope tiles use
+//     their automatic average (see collectTerrain), so no slope colour is stored;
+//   * every alternate landscape is chosen to stay visually distinct from ALL
+//     object colours — ochre robot [200,168,64], pale sentinel [230,230,240],
+//     grey boulder [154,154,158] and the always-green trees [46,139,51]. Hence
+//     alternates avoid green-dominant ground (green trees would vanish), keep
+//     Sand paler/warmer than the boulder, and tint Ice clearly blue so it reads
+//     apart from the neutral-grey boulder. The one intrinsic overlap is Sand vs
+//     the ochre robot (~49 RGB) — a sand palette can't get much further from a
+//     gold robot; the per-polygon dark outline keeps the robot legible on it.
+//     PALETTES[0] (Verdant) is green-on-green with the tree by design (that is
+//     the original game's look and is left unchanged).
+export const PALETTES = [
+  { name: 'Verdant',   skyTop: SKY_TOP,        skyHorizon: SKY_HORIZON,   tileA: GREEN_A,          tileB: GREEN_B },
+  { name: 'Steel',     skyTop: [178, 102, 34], skyHorizon: [236, 182, 96], tileA: [92, 122, 168],  tileB: [58, 86, 130] },
+  { name: 'Magenta',   skyTop: [22, 12, 40],   skyHorizon: [74, 42, 92],   tileA: [192, 62, 152],  tileB: [138, 36, 108] },
+  { name: 'Sand',      skyTop: [20, 92, 110],  skyHorizon: [92, 182, 190], tileA: [224, 208, 158], tileB: [190, 166, 112] },
+  { name: 'Teal',      skyTop: [58, 30, 110],  skyHorizon: [150, 110, 200], tileA: [58, 182, 176], tileB: [36, 128, 124] },
+  { name: 'Crimson',   skyTop: [202, 180, 176], skyHorizon: [240, 226, 216], tileA: [202, 56, 56], tileB: [148, 32, 40] },
+  { name: 'Ice',       skyTop: [12, 20, 60],   skyHorizon: [42, 72, 132],  tileA: [184, 206, 236], tileB: [116, 150, 210] },
+  { name: 'Sunset',    skyTop: [190, 88, 38],  skyHorizon: [242, 172, 92], tileA: [142, 136, 60],  tileB: [100, 94, 42] },
+];
+
+// Active palette index. Default 0 => existing callers see the unchanged look.
+let activePaletteIndex = 0;
+// setPalette(index): switch the active landscape palette (wraps modulo length,
+// negative-safe). drawSky + collectTerrain read the active palette every frame.
+export function setPalette(index) {
+  const n = PALETTES.length;
+  activePaletteIndex = (((index | 0) % n) + n) % n;
+  return activePaletteIndex;
+}
+const activePalette = () => PALETTES[activePaletteIndex];
+
 const COL = {
   treeLeaf: [0x2E, 0x8B, 0x33],
   treeTrunk: [0x6B, 0x49, 0x2A],
@@ -65,9 +105,10 @@ function faceBrightness(worldVerts, flipToUp = false) {
 
 // ---- Sky ----------------------------------------------------------------
 function drawSky(ctx) {
+  const pal = activePalette();
   const g = ctx.createLinearGradient(0, 0, 0, VIEW_H);
-  g.addColorStop(0, rgbStr(SKY_TOP));
-  g.addColorStop(1, rgbStr(SKY_HORIZON));
+  g.addColorStop(0, rgbStr(pal.skyTop));
+  g.addColorStop(1, rgbStr(pal.skyHorizon));
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, VIEW_W, VIEW_H);
   // Subtle horizontal bands for the retro look.
@@ -156,6 +197,8 @@ function toward(rgb, white, t) {
 function collectTerrain(list, view, world, pickTile) {
   const tiles = world.tiles;
   const size = tiles.length;
+  const pal = activePalette();
+  const tileA = pal.tileA, tileB = pal.tileB;
   const pkx = pickTile ? pickTile.x : -1;
   const pkz = pickTile ? pickTile.z : -1;
   for (let z = 0; z < size; z++) {
@@ -169,13 +212,13 @@ function collectTerrain(list, view, world, pickTile) {
       const p01 = { x: x, y: h01 * HEIGHT_SCALE, z: z + 1 };
       let base;
       if (t.flat) {
-        base = ((x + z) & 1) ? GREEN_A : GREEN_B;   // checkerboard
+        base = ((x + z) & 1) ? tileA : tileB;   // checkerboard
       } else {
-        // Slopes: blend the two greens then let the normal darken them.
+        // Slopes: blend the two tile colours then let the normal darken them.
         base = [
-          (GREEN_A[0] + GREEN_B[0]) >> 1,
-          (GREEN_A[1] + GREEN_B[1]) >> 1,
-          (GREEN_A[2] + GREEN_B[2]) >> 1,
+          (tileA[0] + tileB[0]) >> 1,
+          (tileA[1] + tileB[1]) >> 1,
+          (tileA[2] + tileB[2]) >> 1,
         ];
       }
 

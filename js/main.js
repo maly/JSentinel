@@ -4,7 +4,7 @@
 import { generateTerrain } from './terrain.js';
 import { World } from './world.js';
 import { Game } from './game.js';
-import { render } from './renderer.js';
+import { render, setPalette, PALETTES } from './renderer.js';
 import { screenRay } from './math3d.js';
 import { createInput } from './input.js';
 import { createHud } from './hud.js';
@@ -15,9 +15,22 @@ const LOGIC_HZ = 10;
 const YAW_SPEED = 1.2;        // rad/s
 const YAW_SPEED_FAST = 3.0;
 const PITCH_LIMIT = Math.PI / 3;
-const TREE_DENSITY = 0.25;    // trees on ~25% of free flat tiles
 const BOULDER_COUNT = 2;
 const START_ENERGY = 10;
+
+// Difficulty rises in steps of 200 levels and maxes out at level 2000:
+// tier 0 = levels 0000-0199 (today's balance), tier 10 = harshest.
+// Harder tiers mean rougher terrain, fewer trees and more sentries.
+function difficultyFor(level) {
+  const tier = Math.min(Math.floor(level / 200), 10);
+  const t = tier / 10;
+  return {
+    tier,
+    ruggedness: t,                                  // terrain generator knob
+    treeDensity: 0.25 - 0.15 * t,                   // 25% -> 10% of free flats
+    minSentries: tier >= 6 ? 3 : (tier >= 3 ? 2 : 1),
+  };
+}
 
 // Deterministic level generation: the level's 8-digit code drives BOTH the
 // terrain and the object scatter, so a landscape is fully reproducible.
@@ -75,7 +88,7 @@ function pickRandom(arr, rng) {
   return arr[Math.floor(rng() * arr.length)];
 }
 
-function setupLevel(w, rng) {
+function setupLevel(w, rng, diff) {
   const flats = flatTiles(w.tiles);
 
   // Sentinel on the single highest plateau.
@@ -109,7 +122,9 @@ function setupLevel(w, rng) {
   // general landscape, so an absolute midpoint threshold would filter out
   // every real hill.
   const byHeight = hilltops.slice().sort((a, b) => b.height - a.height);
-  const sentryCount = 1 + Math.floor(rng() * 3);        // 1..3
+  // Difficulty raises the guaranteed minimum; the cap stays at 3.
+  const minS = diff.minSentries;
+  const sentryCount = Math.min(3, minS + Math.floor(rng() * (4 - minS)));
   const elevated = byHeight.slice(0, Math.max(sentryCount * 3, Math.ceil(byHeight.length / 3)));
   let sentryPool = elevated.length >= sentryCount ? elevated : hilltops;
   const anchors = [{ x: summit.x, z: summit.z }];
@@ -144,11 +159,12 @@ function setupLevel(w, rng) {
   pool.sort((a, b) => dist2(b) - dist2(a));
   const start = pickRandom(pool.slice(0, Math.max(1, Math.floor(pool.length / 10))), rng);
 
-  // Scatter trees over ~25% of the free flat tiles, plus a couple of boulders.
+  // Scatter trees over the difficulty-scaled share of free flat tiles
+  // (25% at tier 0 down to 10% at max), plus a couple of boulders.
   const free = () => flats.filter(
     (t) => w.objectsAt(t.x, t.z).length === 0 && !(t.x === start.x && t.z === start.z),
   );
-  const treeCount = Math.floor(free().length * TREE_DENSITY);
+  const treeCount = Math.floor(free().length * diff.treeDensity);
   for (let i = 0; i < treeCount; i++) {
     const spots = free();
     if (!spots.length) break;
@@ -167,9 +183,13 @@ function setupLevel(w, rng) {
 
 function newGame() {
   const code = levelToSeed(level);
-  world = new World(generateTerrain(code));
+  const diff = difficultyFor(level);
+  // Level 0000 keeps the classic green look; other levels cycle palettes
+  // pseudo-randomly via their landscape code.
+  setPalette(level === 0 ? 0 : code % PALETTES.length);
+  world = new World(generateTerrain(code, diff.ruggedness));
   const rng = mulberry32((code ^ 0x9e3779b9) >>> 0);
-  const { start, sentinel } = setupLevel(world, rng);
+  const { start, sentinel } = setupLevel(world, rng, diff);
   game = new Game(world, { x: start.x, z: start.z, energy: START_ENERGY });
   // Face the Sentinel on spawn (math3d yaw convention: 0 = +Z, dir.x = sin yaw).
   camera.yaw = Math.atan2(sentinel.x - start.x, sentinel.z - start.z);
