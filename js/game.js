@@ -161,23 +161,51 @@ export class Game {
       this._message('The landscape yields no more energy');
       return false;
     }
-    // As in the original: absorption targets the SQUARE the object stands on.
-    // Hitting the object's body is forgiven when the ray, continued past it,
-    // would land in that same square — a near-miss of the base still counts.
+    // "Active surface" model: the only absorbable thing on a square is the TOP
+    // of its stack, and the crosshair must actually point AT it. You reach it
+    // either (a) by hitting the object's body / top face, or (b) — only when it
+    // rests alone directly on the ground — by pointing at its base square. A
+    // buried object (something stacked on top of it) can never be absorbed:
+    // stacks come apart strictly top-down.
+    let object = null;
     if (pickResult.object) {
-      const gt = pickResult.groundTile;
       const o = pickResult.object;
-      if (!gt || gt.x !== o.x || gt.z !== o.z) {
-        this._message('Aim at the square the object stands on');
+      const stack = this.world.objectsAt(o.x, o.z);
+      const top = stack[stack.length - 1] ?? null;
+      if (o !== top) {
+        // Pointed at a boulder/pedestal that still carries something above it.
+        this._message('Remove what is on top first');
         return false;
       }
+      // Near-miss forgiveness only matters for a lone object on the ground: a
+      // body hit whose continued ray lands in a DIFFERENT square means you are
+      // really pointing past it. For an object standing ON a stack the aim goes
+      // UPWARD and the ray never reaches terrain (groundTile === null) — the
+      // direct hit on its top face is itself proof of aim, so no groundTile
+      // check applies (otherwise an elevated stack, or the Sentinel on its
+      // pedestal atop a summit, would be unabsorbable from normal eye heights).
+      if (stack.length === 1) {
+        const gt = pickResult.groundTile;
+        if (!gt || gt.x !== o.x || gt.z !== o.z) {
+          this._message('Aim at the square the object stands on');
+          return false;
+        }
+      }
+      object = top;
+    } else {
+      const tile = pickResult.tile;
+      if (!tile) return false;
+      const stack = this.world.objectsAt(tile.x, tile.z);
+      const top = stack[stack.length - 1] ?? null;
+      if (!top) return false;
+      // The bare base square only yields a lone object standing on the ground;
+      // a taller stack must be taken from its top face (never the tile below).
+      if (stack.length > 1) {
+        this._message('Aim at the top of the stack');
+        return false;
+      }
+      object = top;
     }
-    const tile = pickResult.object
-      ? { x: pickResult.object.x, z: pickResult.object.z }
-      : pickResult.tile;
-    if (!tile) return false;
-    const stack = this.world.objectsAt(tile.x, tile.z);
-    const object = stack[stack.length - 1] ?? null;
     if (!object || object.id === this.playerShellId) return false;
     if (object.type === 'pedestal') {
       this._message('The pedestal cannot be absorbed');
@@ -207,22 +235,43 @@ export class Game {
   }
 
   _create(type, tile, pickResult = null) {
-    if (!tile) return false;
     const cost = ENERGY[type];
     if (this.energy < cost) {
       this._message('Insufficient energy');
       return false;
     }
+    // "Active surface" model: building ONTO a stack happens by focusing the top
+    // object's face (the active surface becomes the top of the highest boulder).
+    // The bare base square only accepts a new object when the square is empty —
+    // you can never stack by aiming at the ground beside an existing pile.
+    let target = null;
+    if (pickResult && pickResult.object) {
+      const o = pickResult.object;
+      const stack = this.world.objectsAt(o.x, o.z);
+      const top = stack[stack.length - 1] ?? null;
+      if (o !== top) {
+        this._message('Aim at the top of the stack');
+        return false;
+      }
+      target = { x: o.x, z: o.z };
+    } else {
+      target = tile ?? pickResult?.tile ?? null;
+      if (!target) return false;
+      if (this.world.objectsAt(target.x, target.z).length > 0) {
+        this._message('Aim at the top of the stack');
+        return false;
+      }
+    }
     // A pick with a hit point came from the player's own crosshair ray —
     // the ray itself proves the square is visible. The centre-of-tile LOS
     // check is only a fallback for direct (rayless) calls.
-    const seen = pickResult?.point ? true : this._canSeeTileTop(tile.x, tile.z);
+    const seen = pickResult?.point ? true : this._canSeeTileTop(target.x, target.z);
     if (!seen) {
       this._message('Target square is not visible');
       return false;
     }
     // dissolve: 0 -> materializes gradually (visual dissolve-in).
-    const object = this.world.addObject({ type, x: tile.x, z: tile.z, energy: cost, dissolve: 0 });
+    const object = this.world.addObject({ type, x: target.x, z: target.z, energy: cost, dissolve: 0 });
     if (!object) {
       this._message('Cannot create object there');
       return false;

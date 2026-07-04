@@ -26,6 +26,17 @@ function tickSeconds(game, seconds) {
   }
 }
 
+// Fire a real crosshair ray from an eye point toward a world-space target and
+// return world.pickTarget's result — exercising the SAME geometry the game
+// uses each frame (so groundTile is derived, not hand-forged).
+function pickRay(world, eye, target) {
+  return world.pickTarget(eye, {
+    x: target.x - eye.x,
+    y: target.y - eye.y,
+    z: target.z - eye.z,
+  });
+}
+
 function testEnergyEconomy() {
   const world = new World(makeTiles());
   const game = new Game(world, { x: 0, z: 0, energy: 10 });
@@ -179,11 +190,149 @@ function testAbsorbTargetsSquareTopObject() {
   const boulder = world.addObject({ type: 'boulder', x: 2, z: 2 });
   const tree = world.addObject({ type: 'tree', x: 2, z: 2 });
 
-  // Pointing at the square absorbs the TOP object of its stack (the tree).
-  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: null, point: { x: 2.5, y: 0.5, z: 2.5 } }), true);
+  // NEW RULE: a stack cannot be absorbed by pointing at its base square — the
+  // active surface is the top face, so you must aim the object standing there.
+  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: null, point: { x: 2.5, y: 0.5, z: 2.5 } }), false);
+  assert.equal(game.energy, 10);
+  assert.equal(world.objects.includes(tree), true);
+
+  // Aiming the top object (the tree) absorbs it; the boulder underneath stays.
+  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: tree, point: { x: 2.5, y: 1.2, z: 2.5 }, groundTile: { x: 2, z: 2 } }), true);
   assert.equal(game.energy, 10 + ENERGY.tree);
   assert.equal(world.objects.includes(tree), false);
   assert.equal(world.objects.includes(boulder), true);
+}
+
+// Rule 1: building ONTO a stack goes through the top face; the bare base
+// square of an occupied tile does not accept a new object.
+function testBuildOnStackViaTopFace() {
+  const world = new World(makeTiles());
+  const game = new Game(world, { x: 0, z: 0, energy: 20 });
+  const base = world.addObject({ type: 'boulder', x: 2, z: 2 });
+
+  // Focusing the top face (object hit) stacks a boulder on top.
+  assert.equal(game.doAction('boulder', { tile: { x: 2, z: 2 }, object: base, point: { x: 2.5, y: 1, z: 2.5 }, groundTile: { x: 2, z: 2 } }), true);
+  assert.equal(world.objectsAt(2, 2).length, 2);
+
+  // Pointing at the bare base square of the occupied tile is refused.
+  const count = world.objectsAt(2, 2).length;
+  assert.equal(game.doAction('tree', { tile: { x: 2, z: 2 }, object: null, point: { x: 2.5, y: 0, z: 2.5 } }), false);
+  assert.equal(world.objectsAt(2, 2).length, count);
+
+  // Pointing at a BURIED object (not the top of the stack) is also refused.
+  assert.equal(game.doAction('boulder', { tile: { x: 2, z: 2 }, object: base, point: { x: 2.5, y: 0.4, z: 2.5 }, groundTile: { x: 2, z: 2 } }), false);
+  assert.equal(world.objectsAt(2, 2).length, count);
+}
+
+// Rule 4: a lone object resting on the ground may be absorbed by pointing at
+// its base square (or at the object itself — same target).
+function testAbsorbLoneBoulderViaSquare() {
+  const world = new World(makeTiles());
+  const game = new Game(world, { x: 0, z: 0, energy: 10 });
+  const boulder = world.addObject({ type: 'boulder', x: 2, z: 2 });
+
+  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: null, point: { x: 2.5, y: 0, z: 2.5 } }), true);
+  assert.equal(game.energy, 10 + ENERGY.boulder);
+  assert.equal(world.objects.includes(boulder), false);
+}
+
+// Rules 2 & 3: a thing standing on a boulder is absorbed only by aiming the
+// thing; the boulder underneath cannot be absorbed while loaded. Stacks come
+// apart strictly top-down.
+function testAbsorbStackTopDownOnly() {
+  const world = new World(makeTiles());
+  const game = new Game(world, { x: 0, z: 0, energy: 10 });
+  const boulder = world.addObject({ type: 'boulder', x: 2, z: 2 });
+  const robot = world.addObject({ type: 'robot', x: 2, z: 2 });
+
+  // Base square of a loaded stack: refused (rule 3 — boulder is loaded).
+  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: null, point: { x: 2.5, y: 0, z: 2.5 } }), false);
+  assert.equal(world.objectsAt(2, 2).length, 2);
+  // Aiming the buried boulder directly: still refused (rule 3).
+  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: boulder, point: { x: 2.5, y: 0.4, z: 2.5 }, groundTile: { x: 2, z: 2 } }), false);
+  assert.equal(world.objects.includes(boulder), true);
+
+  // Aiming the robot on top: absorbed (rule 2).
+  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: robot, point: { x: 2.5, y: 1.4, z: 2.5 }, groundTile: { x: 2, z: 2 } }), true);
+  assert.equal(game.energy, 10 + ENERGY.robot);
+  assert.equal(world.objects.includes(robot), false);
+
+  // Now the boulder stands alone — absorbable via its base square (rule 4).
+  assert.equal(game.doAction('absorb', { tile: { x: 2, z: 2 }, object: null, point: { x: 2.5, y: 0, z: 2.5 } }), true);
+  assert.equal(game.energy, 10 + ENERGY.robot + ENERGY.boulder);
+  assert.equal(world.objectsAt(2, 2).length, 0);
+}
+
+// Rule 5: the Sentinel stands on a pedestal (stack: pedestal + sentinel). It is
+// absorbed only by aiming the sentinel (the pedestal's top face where it
+// stands), never the tile below; and while the sentinel stands there the
+// pedestal itself cannot be absorbed (rule 3).
+function testPedestalSentinelAbsorb() {
+  const world = new World(makeTiles());
+  const game = new Game(world, { x: 0, z: 0, energy: 10 });
+  const pedestal = world.addObject({ type: 'pedestal', x: 3, z: 3 });
+  const sentinel = world.addObject({ type: 'sentinel', x: 3, z: 3 });
+  assert.equal(world.objectsAt(3, 3).length, 2);
+
+  // Aiming the tile below the pedestal: refused (rule 5 — not the tile below).
+  assert.equal(game.doAction('absorb', { tile: { x: 3, z: 3 }, object: null, point: { x: 3.5, y: 0, z: 3.5 } }), false);
+  assert.equal(world.objects.includes(sentinel), true);
+  // Aiming the pedestal itself while loaded: refused (rule 3).
+  assert.equal(game.doAction('absorb', { tile: { x: 3, z: 3 }, object: pedestal, point: { x: 3.5, y: 0.4, z: 3.5 }, groundTile: { x: 3, z: 3 } }), false);
+  assert.equal(world.objects.includes(pedestal), true);
+
+  // Aiming the sentinel (the pedestal's top face): absorbed (rules 2 & 5).
+  assert.equal(game.doAction('absorb', { tile: { x: 3, z: 3 }, object: sentinel, point: { x: 3.5, y: 2, z: 3.5 }, groundTile: { x: 3, z: 3 } }), true);
+  assert.equal(game.energy, 10 + ENERGY.sentinel);
+  assert.equal(world.objects.includes(sentinel), false);
+  // Once the Sentinel is gone the landscape yields no more energy (original
+  // rule), so the pedestal remains — untouched — beneath.
+  assert.equal(world.objects.includes(pedestal), true);
+  assert.equal(game.doAction('absorb', { tile: { x: 3, z: 3 }, object: null, point: { x: 3.5, y: 0, z: 3.5 } }), false);
+}
+
+// REGRESSION: the crosshair ray toward an ELEVATED top object aims UPWARD, so
+// world.pickTarget never reaches terrain and returns groundTile === null. The
+// absorb path must NOT treat that as "pointing past" the object — a direct hit
+// on its top face is proof of aim. Uses the real pickTarget geometry.
+function testAbsorbElevatedStackViaRealRay() {
+  const world = new World(makeTiles(14, 14));
+  const game = new Game(world, { x: 0, z: 6, energy: 10 });
+  // Robot standing on two boulders at (6,6): top object well above eye height.
+  world.addObject({ type: 'boulder', x: 6, z: 6 });
+  world.addObject({ type: 'boulder', x: 6, z: 6 });
+  const robot = world.addObject({ type: 'robot', x: 6, z: 6 });
+
+  const eye = { x: 1.5, y: 1.8, z: 6.5 };            // robot on the ground
+  const pick = pickRay(world, eye, { x: 6.5, y: robot.y + 1.0, z: 6.5 });
+  // Sanity: the ray really did hit the top object and the aim was upward.
+  assert.equal(pick.object, robot);
+  assert.equal(pick.groundTile, null);
+
+  assert.equal(game.doAction('absorb', pick), true);
+  assert.equal(game.energy, 10 + ENERGY.robot);
+  assert.equal(world.objects.includes(robot), false);
+}
+
+// REGRESSION: same for the Sentinel on its pedestal atop a summit — the win
+// path depends on being able to absorb it from a lower eye position.
+function testAbsorbSentinelOnPedestalViaRealRay() {
+  // Summit at (6,6) raised to level 8 (world Y 2.0); player on low ground.
+  const world = new World(makeTiles(14, 14, (x, z) => (x === 6 && z === 6 ? 8 : 0)));
+  const game = new Game(world, { x: 0, z: 6, energy: 10 });
+  world.addObject({ type: 'pedestal', x: 6, z: 6 });
+  const sentinel = world.addObject({ type: 'sentinel', x: 6, z: 6 });
+
+  // Eye elevated enough to see over — as the player would be after climbing —
+  // but still below the sentinel's body, so the ray aims upward.
+  const eye = { x: 3.5, y: 3.0, z: 6.5 };
+  const pick = pickRay(world, eye, { x: 6.5, y: sentinel.y + 1.0, z: 6.5 });
+  assert.equal(pick.object, sentinel);
+  assert.equal(pick.groundTile, null);
+
+  assert.equal(game.doAction('absorb', pick), true);
+  assert.equal(game.energy, 10 + ENERGY.sentinel);
+  assert.equal(world.objects.includes(sentinel), false);
 }
 
 function testSentryActsAsWatcher() {
@@ -307,6 +456,12 @@ testSentinelScanDrainChain();
 testBoulderDrainsToTree();
 testMeanieTriggerWhenHeadVisibleBaseHidden();
 testAbsorbTargetsSquareTopObject();
+testBuildOnStackViaTopFace();
+testAbsorbLoneBoulderViaSquare();
+testAbsorbStackTopDownOnly();
+testPedestalSentinelAbsorb();
+testAbsorbElevatedStackViaRealRay();
+testAbsorbSentinelOnPedestalViaRealRay();
 testSentryActsAsWatcher();
 testSentryAbsorbYieldsFour();
 testMeanieLosesDistantTarget();
