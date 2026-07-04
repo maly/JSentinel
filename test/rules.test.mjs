@@ -208,6 +208,17 @@ function testSentryAbsorbYieldsFour() {
   assert.equal(ENERGY.sentry, 4);
 }
 
+function testHyperspaceRevertsMeanie() {
+  const world = new World(makeTiles());
+  const game = new Game(world, { x: 0, z: 0, energy: 10 });
+  const meanie = world.addObject({ type: 'meanie', x: 5, z: 5, facing: 0 });
+
+  // Escaping by hyperspace resolves the local threat: the meanie reverts.
+  assert.equal(game.doAction('hyperspace'), true);
+  assert.equal(meanie.type, 'tree');
+  assert.equal(world.objects.filter((o) => o.type === 'meanie').length, 0);
+}
+
 function testTransferOnlyIntoRobots() {
   const world = new World(makeTiles());
   const game = new Game(world, { x: 0, z: 0, energy: 10 });
@@ -286,6 +297,7 @@ testMeanieTriggerWhenHeadVisibleBaseHidden();
 testAbsorbTargetsSquareTopObject();
 testSentryActsAsWatcher();
 testSentryAbsorbYieldsFour();
+testHyperspaceRevertsMeanie();
 testTransferOnlyIntoRobots();
 testNoAbsorbAfterSentinel();
 testWinConditionSequence();

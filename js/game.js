@@ -297,9 +297,23 @@ export class Game {
     const currentHeight = this._playerBasePoint().y;
     const destination = this._randomFlatTileAtOrBelow(currentHeight);
     if (destination) this._movePlayerTo(destination.x, destination.z);
+    // A meanie is a LOCAL threat: teleporting away resolves it. Without this
+    // it would keep tracking the player's new position across the whole map
+    // and force a second jump.
+    this._revertMeanies();
     this._message('Hyperspace');
     this._event('hyperspace');
     return true;
+  }
+
+  _revertMeanies() {
+    for (const object of this.world.objects) {
+      if (object.type !== 'meanie') continue;
+      object.type = 'tree';
+      object.energy = ENERGY.tree;
+      object.height = undefined;
+      object.radius = undefined;
+    }
   }
 
   // All watchers — the Sentinel and its sentries — behave the same way:
