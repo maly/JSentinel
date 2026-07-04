@@ -24,7 +24,7 @@
 // Sound names: 'absorb', 'create', 'transfer', 'hyperspace', 'drain',
 // 'seen', 'draining', 'meanie', 'uturn', 'won', 'dead'
 
-const MASTER_MAX = 0.5;   // gain of the master node when its slider is at 100%
+const MASTER_MAX = 1.0;   // gain of the master node when its slider is at 100%
 
 export function createAudio() {
   let ctx = null;
