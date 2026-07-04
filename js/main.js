@@ -9,6 +9,7 @@ import { screenRay } from './math3d.js';
 import { createInput } from './input.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
+import { createMusic } from './music.js';
 import { levelToSeed, seedToLevel, formatLevel, formatSeed, parseSeed } from './levels.js';
 
 const LOGIC_HZ = 10;
@@ -61,13 +62,21 @@ const ctx = canvas.getContext('2d');
 const input = createInput(canvas);
 const hud = createHud(document.getElementById('overlay'));
 const audio = createAudio();
+// Background music shares audio.js's single AudioContext (no second context).
+const music = createMusic(audio.context, audio.musicBus);
 const overlayEl = document.getElementById('overlay');
 // Browsers only allow audio after a user gesture. The splash/menu key & click
-// handlers below call audio.unlock() on every interaction (idempotent), so an
+// handlers below call unlockAudio() on every interaction (idempotent), so an
 // Enter on the splash is guaranteed to unlock before the game starts. These
 // once-listeners stay as a catch-all for gestures that bypass those handlers.
-window.addEventListener('keydown', () => audio.unlock(), { once: true });
-window.addEventListener('mousedown', () => audio.unlock(), { once: true });
+// music.start() can only take effect once unlock() has created the context, so
+// it is paired with every unlock() call.
+function unlockAudio() {
+  audio.unlock();
+  music.start();
+}
+window.addEventListener('keydown', unlockAudio, { once: true });
+window.addEventListener('mousedown', unlockAudio, { once: true });
 
 // State machine:
 //   'splash' -> 'menu' -> 'playing'         (menu START GAME)
@@ -213,6 +222,9 @@ function newGame() {
   camera.pitch = 0;
   syncCamera();
   state = 'playing';
+  // Entering gameplay: after the current track (typically `title`) finishes,
+  // the theme rotation takes over. won/dead/complete stay in game mode.
+  music.setMode('game');
   lastScanState = 0;
   nextLevel = null;
   hud.showScreen(null);
@@ -243,6 +255,8 @@ function codeDisplay(digits) {
 function goToMenu() {
   state = 'menu';
   menuSelection = 0;
+  // A real return to the menu routes music back to `title` at the next boundary.
+  music.setMode('menu');
   hud.showMenu(menuSelection);
 }
 
@@ -253,7 +267,7 @@ function goToCode() {
 }
 
 function leaveSplash() {
-  audio.unlock();
+  unlockAudio();
   // Deep link: a valid ?seed= jumps straight into its landscape.
   if (seedLink.present) { level = seedLink.level; newGame(); return; }
   goToMenu();
@@ -280,7 +294,7 @@ function onMenuKeyDown(e) {
   const isEnter = code === 'Enter' || code === 'NumpadEnter';
 
   if (state === 'splash') {
-    audio.unlock();
+    unlockAudio();
     if (isEnter) { e.preventDefault(); leaveSplash(); }
     return;
   }
@@ -364,7 +378,7 @@ window.addEventListener('keydown', (e) => {
 
 // Optional mouse support on the splash and menu screens.
 overlayEl.addEventListener('click', (e) => {
-  audio.unlock();
+  unlockAudio();
   if (state === 'splash') { leaveSplash(); return; }
   if (state === 'menu') {
     const opt = e.target.closest('.hud-menu-option');
@@ -465,6 +479,10 @@ function frame(now) {
       lastScanState = game.scanState;
     }
     if (game.status === 'won') {
+      // A level was completed: the current theme advances to the next one at
+      // its end (theme5 -> theme1). Fires once — the win block is gated by
+      // state==='playing', which no longer holds after we switch below.
+      music.onLevelWon();
       // Original progression: next level = current + remaining energy.
       // Past level 9999 there is nowhere further to go — the game is done.
       const code = levelToSeed(level);
@@ -514,3 +532,5 @@ window.__dbg = {
   get world() { return world; },
   get game() { return game; },
 };
+// Music debug hook: current track, planned successor, mode, format, ctx state.
+window.__music = music;

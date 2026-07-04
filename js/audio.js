@@ -3,6 +3,8 @@
 // createAudio() -> {
 //   unlock(): void,        // create/resume AudioContext; call on first user gesture
 //   play(name): void,      // play a named sound; silent no-op before unlock()
+//   context(): AudioContext|null,   // the shared context (null before unlock)
+//   musicBus(): GainNode|null,      // master gain node — music routes UNDER it
 // }
 //
 // Sound names: 'absorb', 'create', 'transfer', 'hyperspace', 'drain',
@@ -43,7 +45,12 @@ export function createAudio() {
     }
   }
 
-  return { unlock, play };
+  // Expose the shared context + master gain so music.js can reuse them (one
+  // AudioContext for the whole app). Both are null until unlock() runs.
+  function context() { return ctx; }
+  function musicBus() { return master; }
+
+  return { unlock, play, context, musicBus };
 }
 
 // ---------- low-level helpers ----------
