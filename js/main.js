@@ -21,6 +21,12 @@ const PITCH_LIMIT = Math.PI / 3;
 // would add input lag) — only discrete target changes tween. rate ~10 => the
 // 180° u-turn sweeps in ~250ms. angleDiff picks the shortest direction.
 const YAW_TWEEN_RATE = 10;
+// Won-cinematic camera turn: slower than the u-turn/transfer tween above so
+// the reorientation reads as a deliberate cinematic pan rather than a snap.
+const CINEMATIC_YAW_RATE = 5;
+// How close (tiles) a target heading's aim point may be to the camera before
+// it's considered too unstable to steer by (see beginWonCinematic).
+const CINEMATIC_AIM_MIN_DIST = 3;
 // Drain shake: exp decay ~0.5s (rate 5 => e^-2.5 after 0.5s). Render-only.
 const SHAKE_DECAY = 5;
 // Watcher facing tween: exponential approach of the render-only `_displayFacing`
@@ -109,9 +115,12 @@ const seedLink = urlSeed();
 let state = 'splash';         // 'splash' | 'menu' | 'code' | 'playing' | 'won' | 'complete' | 'dead' | 'settings'
 let world = null;
 let game = null;
-let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, targetYaw: 0 };
+let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0 };
 // Jump-turn tween + drain-shake state (render/camera only, never logic/pick).
 let yawTweening = false;
+// Won-cinematic pitch tween (see beginWonCinematic / updateCinematic). Only
+// ever used outside 'playing', so it never competes with held pitch input.
+let pitchTweening = false;
 let shake = 0;
 // Screen-transition + won-cinematic state. `fading` is true while a black wipe
 // is in flight (blocks stray Enter). `cinematic` holds the win dissolve wave.
@@ -312,15 +321,64 @@ function beginWonCinematic(onDone) {
     o._wonDist = Math.hypot(dx, dz);
     if (o._wonDist > maxD) maxD = o._wonDist;
   }
+  // Winning typically means transferring onto a high point or absorbing the
+  // Sentinel, both of which tend to sit near the map edge — the player can
+  // easily be looking out over the boundary, away from the landscape, right
+  // when the dissolve wave starts. Steer the camera toward the remaining
+  // scenery first so the wave is actually visible. Delay the wave itself a
+  // touch (rotDelay) so the turn is visibly underway before it starts.
+  const rotDelay = 0.3;
+  let cx = 0, cz = 0, n = 0;
+  for (const o of world.objects) { cx += o.x + 0.5; cz += o.z + 0.5; n += 1; }
+  let aimX, aimZ;
+  if (n > 0) { aimX = cx / n; aimZ = cz / n; } else { aimX = px; aimZ = pz; }
+  let dx = aimX - px, dz = aimZ - pz;
+  if (Math.hypot(dx, dz) < CINEMATIC_AIM_MIN_DIST) {
+    // Object centroid is right on top of the camera (nothing left standing
+    // nearby) — aim at the map center instead of a degenerate direction.
+    dx = world.width / 2 - px;
+    dz = world.depth / 2 - pz;
+  }
+  if (Math.hypot(dx, dz) >= 0.001) {
+    // yaw=0 looks along +Z, increasing yaw turns right (see math3d.js) —
+    // atan2(dx, dz) matches that convention (sin(yaw)~dx, cos(yaw)~dz).
+    const targetYaw = Math.atan2(dx, dz);
+    if (Math.abs(angleDiff(camera.yaw, targetYaw)) > 0.05) {
+      camera.targetYaw = targetYaw;
+      yawTweening = true;
+    }
+    // A mild downward-tilted overview reads better than whatever pitch the
+    // player happened to end on (straight up/down included).
+    if (Math.abs(camera.pitch - (-0.1)) > 0.02) {
+      camera.targetPitch = -0.1;
+      pitchTweening = true;
+    }
+  }
   for (const o of world.objects) {
-    o._wonDelay = (o._wonDist / maxD) * (dur - fade);
+    o._wonDelay = rotDelay + (o._wonDist / maxD) * (dur - fade);
     if (o.dissolve === undefined) o.dissolve = 1; // start solid, fade presentationally
   }
-  cinematic = { t: 0, dur, fade, onDone };
+  cinematic = { t: 0, dur: dur + rotDelay, fade, onDone };
 }
 
 // Advance the won-cinematic dissolve wave. Called every frame while active.
 function updateCinematic(dt) {
+  // Ease the camera toward the landscape heading beginWonCinematic picked.
+  // frame()'s own jump-turn tween block only runs while state === 'playing',
+  // and beginWonCinematic already flips state to 'won' before this can run,
+  // so there is no double-application — this is the sole driver once won.
+  if (state !== 'playing') {
+    if (yawTweening) {
+      const d = angleDiff(camera.yaw, camera.targetYaw);
+      if (Math.abs(d) < 0.001) { camera.yaw = camera.targetYaw; yawTweening = false; }
+      else camera.yaw += d * (1 - Math.exp(-dt * CINEMATIC_YAW_RATE));
+    }
+    if (pitchTweening) {
+      const dp = camera.targetPitch - camera.pitch;
+      if (Math.abs(dp) < 0.001) { camera.pitch = camera.targetPitch; pitchTweening = false; }
+      else camera.pitch += dp * (1 - Math.exp(-dt * CINEMATIC_YAW_RATE));
+    }
+  }
   if (!cinematic || !world) return;
   cinematic.t += dt;
   const { t, fade } = cinematic;
