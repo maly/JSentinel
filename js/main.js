@@ -9,6 +9,7 @@ import { screenRay } from './math3d.js';
 import { createInput } from './input.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
+import { levelToSeed, seedToLevel, formatLevel, formatSeed } from './levels.js';
 
 const LOGIC_HZ = 10;
 const YAW_SPEED = 1.2;        // rad/s
@@ -18,9 +19,8 @@ const TREE_DENSITY = 0.25;    // trees on ~25% of free flat tiles
 const BOULDER_COUNT = 2;
 const START_ENERGY = 10;
 
-// Deterministic level generation: the numeric seed drives BOTH the terrain
-// and the object scatter, so the same seed always yields the same landscape.
-// Pin a landscape with ?seed=N in the URL; otherwise each start rolls a new one.
+// Deterministic level generation: the level's 8-digit code drives BOTH the
+// terrain and the object scatter, so a landscape is fully reproducible.
 function mulberry32(seed) {
   let a = seed >>> 0;
   return function rng() {
@@ -31,8 +31,14 @@ function mulberry32(seed) {
   };
 }
 
-const urlSeed = Number.parseInt(new URLSearchParams(location.search).get('seed'), 10);
-const seedPinned = Number.isInteger(urlSeed);
+// ?seed=NNNNNNNN — an 8-digit landscape code. Valid codes map back to a
+// level (0000-9999); anything else starts at level 0000.
+function levelFromUrl() {
+  const raw = new URLSearchParams(location.search).get('seed');
+  if (!raw || !/^\d{1,8}$/.test(raw)) return 0;
+  const mapped = seedToLevel(Number.parseInt(raw, 10));
+  return mapped ?? 0;
+}
 
 const canvas = document.getElementById('screen');
 const ctx = canvas.getContext('2d');
@@ -43,11 +49,12 @@ const audio = createAudio();
 window.addEventListener('keydown', () => audio.unlock(), { once: true });
 window.addEventListener('mousedown', () => audio.unlock(), { once: true });
 
-let state = 'title';          // 'title' | 'playing' | 'won' | 'dead'
+let state = 'title';          // 'title' | 'playing' | 'won' | 'complete' | 'dead'
 let world = null;
 let game = null;
 let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
-let seed = seedPinned ? urlSeed : (Math.floor(Math.random() * 10000));
+let level = levelFromUrl();   // 0000-9999
+let nextLevel = null;         // set when a level is won
 
 // ---- Level setup ----------------------------------------------------------
 // Terrain gives us bare tiles; the level itself (Sentinel on its pedestal on
@@ -159,8 +166,9 @@ function setupLevel(w, rng) {
 }
 
 function newGame() {
-  world = new World(generateTerrain(seed));
-  const rng = mulberry32(seed * 2654435761 + 1);
+  const code = levelToSeed(level);
+  world = new World(generateTerrain(code));
+  const rng = mulberry32((code ^ 0x9e3779b9) >>> 0);
   const { start, sentinel } = setupLevel(world, rng);
   game = new Game(world, { x: start.x, z: start.z, energy: START_ENERGY });
   // Face the Sentinel on spawn (math3d yaw convention: 0 = +Z, dir.x = sin yaw).
@@ -169,11 +177,10 @@ function newGame() {
   syncCamera();
   state = 'playing';
   lastScanState = 0;
+  nextLevel = null;
   hud.showScreen(null);
   hud.setEnergy(game.energy);
-  hud.showMessage(`LANDSCAPE ${String(seed).padStart(4, '0')}`, 3000);
-  // Next restart rolls a fresh landscape unless the seed is pinned via ?seed=N.
-  if (!seedPinned) seed = Math.floor(Math.random() * 10000);
+  hud.showMessage(`LANDSCAPE ${formatLevel(level)}`, 3000);
 }
 
 function syncCamera() {
@@ -212,7 +219,12 @@ function frame(now) {
   // Discrete actions.
   for (const action of input.pollActions()) {
     if (action === 'start') {
-      if (state !== 'playing') newGame();
+      if (state !== 'playing') {
+        if (state === 'won' && nextLevel !== null) level = nextLevel;
+        else if (state === 'complete') level = 0;   // fresh run after finishing
+        // 'dead' and 'title' replay/start the current level unchanged
+        newGame();
+      }
       continue;
     }
     if (state !== 'playing') continue;
@@ -256,8 +268,29 @@ function frame(now) {
       else if (game.scanState === 2) audio.play('draining');
       lastScanState = game.scanState;
     }
-    if (game.status === 'won') { state = 'won'; hud.showScreen('won'); }
-    else if (game.status === 'dead') { state = 'dead'; hud.showScreen('dead'); }
+    if (game.status === 'won') {
+      // Original progression: next level = current + remaining energy.
+      // Past level 9999 there is nowhere further to go — the game is done.
+      const code = levelToSeed(level);
+      const target = level + game.energy;
+      if (target > 9999) {
+        state = 'complete';
+        hud.showScreen('complete', [
+          `LANDSCAPE ${formatLevel(level)} — REPLAY CODE ${formatSeed(code)}`,
+          `FINAL ENERGY ${game.energy}`,
+        ]);
+      } else {
+        state = 'won';
+        nextLevel = target;
+        hud.showScreen('won', [
+          `REPLAY CODE ${formatSeed(code)}`,
+          `NEXT LANDSCAPE ${formatLevel(target)}`,
+        ]);
+      }
+    } else if (game.status === 'dead') {
+      state = 'dead';
+      hud.showScreen('dead', [`REPLAY CODE ${formatSeed(levelToSeed(level))}`]);
+    }
   }
 
   // Render.

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { World, ENERGY } from '../js/world.js';
 import { Game } from '../js/game.js';
+import { levelToSeed, seedToLevel } from '../js/levels.js';
 
 function makeTiles(width = 8, depth = 8, heightFor = () => 0) {
   const tiles = [];
@@ -247,6 +248,34 @@ function testWinConditionSequence() {
   assert.equal(game.status, 'won');
 }
 
+function testLevelSeedMapping() {
+  // Injective: all 10 000 levels map to distinct 8-digit codes, and the
+  // inverse recovers every level exactly.
+  const seen = new Set();
+  for (let level = 0; level < 10000; level += 1) {
+    const code = levelToSeed(level);
+    assert.ok(Number.isInteger(code) && code >= 0 && code < 100000000);
+    assert.ok(!seen.has(code), `duplicate code for level ${level}`);
+    seen.add(code);
+    assert.equal(seedToLevel(code), level);
+  }
+
+  // Non-monotonic: consecutive levels must not produce codes with a constant
+  // (predictable) difference.
+  const d1 = levelToSeed(1) - levelToSeed(0);
+  const d2 = levelToSeed(2) - levelToSeed(1);
+  const d3 = levelToSeed(3) - levelToSeed(2);
+  assert.ok(!(d1 === d2 && d2 === d3), 'code sequence is arithmetic');
+
+  // Invalid codes map to null: find a code that is not any level's image.
+  let probe = 0;
+  while (seen.has(probe)) probe += 1;
+  assert.equal(seedToLevel(probe), null);
+  assert.equal(seedToLevel(-5), null);
+  assert.equal(seedToLevel(100000000), null);
+  assert.equal(seedToLevel(1.5), null);
+}
+
 testEnergyEconomy();
 testStackingRules();
 testLineOfSightTerrainRidge();
@@ -260,5 +289,6 @@ testSentryAbsorbYieldsFour();
 testTransferOnlyIntoRobots();
 testNoAbsorbAfterSentinel();
 testWinConditionSequence();
+testLevelSeedMapping();
 
 console.log('rules.test.mjs: all tests passed');

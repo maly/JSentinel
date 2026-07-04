@@ -241,7 +241,15 @@ const STYLE = `
   animation: hud-blink 1.2s steps(1) infinite;
 }
 
+.hud-screen-info {
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  color: #a8d8b0;
+  margin: 2px 0;
+}
+
 .hud-screen.won .hud-screen-title { color: #9fffb0; }
+.hud-screen.complete .hud-screen-title { color: #ffe08a; text-shadow: 0 0 14px rgba(255, 220, 120, 0.6); }
 .hud-screen.dead .hud-screen-title { color: #ff6b5c; text-shadow: 0 0 12px rgba(255, 60, 40, 0.65); }
 
 @keyframes hud-blink {
@@ -282,6 +290,7 @@ const SCREEN_TEXT = {
   title: { title: 'THE SENTINEL', sub: 'PRESS ENTER' },
   won: { title: 'LANDSCAPE ABSORBED', sub: 'PRESS ENTER' },
   dead: { title: 'ABSORBED BY THE SENTINEL', sub: 'PRESS ENTER' },
+  complete: { title: 'ALL LANDSCAPES ABSORBED', sub: 'PRESS ENTER' },
 };
 
 export function createHud(overlayEl) {
@@ -429,7 +438,9 @@ export function createHud(overlayEl) {
     setScanState(isScanned ? 2 : 0);
   }
 
-  function showScreen(kind) {
+  // `lines`: optional array of extra info strings rendered between the title
+  // and the "PRESS ENTER" prompt (level codes, next-level info, ...).
+  function showScreen(kind, lines = []) {
     if (!kind) {
       screenEl.style.display = 'none';
       screenEl.className = 'hud-screen';
@@ -450,6 +461,13 @@ export function createHud(overlayEl) {
     titleEl.className = 'hud-screen-title';
     titleEl.textContent = text.title;
     screenEl.appendChild(titleEl);
+
+    for (const line of lines) {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'hud-screen-info';
+      lineEl.textContent = line;
+      screenEl.appendChild(lineEl);
+    }
 
     const subEl = document.createElement('div');
     subEl.className = 'hud-screen-sub';
