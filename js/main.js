@@ -328,6 +328,40 @@ function onMenuKeyDown(e) {
 
 window.addEventListener('keydown', onMenuKeyDown);
 
+// Paste support on the ENTER CODE screen: strip everything but digits from the
+// clipboard text and use it to replace the whole buffer (truncated to 8), so
+// pasting a full "XXXX-XXXX" code (with or without the dash, or embedded in
+// other text like "code: 1234 5678 thanks") always lands cleanly regardless of
+// what was typed/pasted before.
+function applyPastedDigits(text) {
+  if (state !== 'code' || !text) return;
+  const digits = text.replace(/\D/g, '').slice(0, 8);
+  if (!digits) return;
+  codeDigits = digits;
+  hud.showCode(codeDisplay(codeDigits), '');
+}
+
+window.addEventListener('paste', (e) => {
+  if (state !== 'code') return;
+  e.preventDefault();
+  const text = e.clipboardData ? e.clipboardData.getData('text') : '';
+  applyPastedDigits(text);
+});
+
+// Fallback for environments where the 'paste' event doesn't fire (some
+// embedders swallow it): try the async Clipboard API on Ctrl/Cmd+V. This is
+// best-effort — permission may be denied, in which case we silently do
+// nothing and rely on the 'paste' event above.
+window.addEventListener('keydown', (e) => {
+  if (state !== 'code') return;
+  const isPasteChord = (e.ctrlKey || e.metaKey) && e.code === 'KeyV';
+  if (!isPasteChord) return;
+  if (!navigator.clipboard || !navigator.clipboard.readText) return;
+  navigator.clipboard.readText().then((text) => {
+    applyPastedDigits(text);
+  }).catch(() => {});
+});
+
 // Optional mouse support on the splash and menu screens.
 overlayEl.addEventListener('click', (e) => {
   audio.unlock();
