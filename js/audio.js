@@ -8,27 +8,30 @@
 //   setVolumes({master,music,effects}): void, // 0..100 percentages (Settings)
 // }
 //
-// Bus graph:  destination <- master <- sfxBus  (SFX play() routes here)
-//                                    <- musicBus (music.js routes here)
+// Bus graph:  destination <- limiter <- master <- sfxBus  (SFX play() routes here)
+//                                              <- musicBus (music.js routes here)
 //
 // The three Settings sliders drive the three gain nodes. 100% on each slider
-// reproduces the pre-Settings balance exactly (effective SFX 0.25, effective
-// music 0.35*0.25 = 0.0875), so the mapping is:
-//   master node gain = MASTER_MAX * master%/100   (MASTER_MAX = old 0.25 master)
+// reproduces the pre-Settings balance exactly (relative SFX vs. music mix is
+// unchanged), so the mapping is:
+//   master node gain = MASTER_MAX * master%/100   (MASTER_MAX = overall loudness knob)
 //   sfxBus   node gain = effects%/100             (100% => unity)
 //   musicBus node gain = music%/100               (100% => unity; music.js keeps
 //                                                  its own 0.35 gain underneath)
+// A DynamicsCompressorNode sits between master and destination as a safety
+// limiter so simultaneous SFX + music at high volume doesn't clip.
 //
 // Sound names: 'absorb', 'create', 'transfer', 'hyperspace', 'drain',
 // 'seen', 'draining', 'meanie', 'uturn', 'won', 'dead'
 
-const MASTER_MAX = 0.25;   // gain of the master node when its slider is at 100%
+const MASTER_MAX = 0.5;   // gain of the master node when its slider is at 100%
 
 export function createAudio() {
   let ctx = null;
   let master = null;
   let sfxBus = null;
   let musicSub = null;
+  let limiter = null;
 
   // Desired slider values (0..100). Applied live once the nodes exist; stored
   // beforehand so Settings can be changed before the first user gesture.
@@ -52,8 +55,15 @@ export function createAudio() {
         const Ctor = window.AudioContext || window.webkitAudioContext;
         if (!Ctor) return; // no WebAudio support — silent no-op forever
         ctx = new Ctor();
+        limiter = ctx.createDynamicsCompressor();
+        limiter.threshold.value = -6;
+        limiter.knee.value = 6;
+        limiter.ratio.value = 12;
+        limiter.attack.value = 0.003;
+        limiter.release.value = 0.25;
+        limiter.connect(ctx.destination);
         master = ctx.createGain();
-        master.connect(ctx.destination);
+        master.connect(limiter);
         sfxBus = ctx.createGain();
         sfxBus.connect(master);
         musicSub = ctx.createGain();
