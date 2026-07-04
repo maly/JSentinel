@@ -50,6 +50,15 @@ function angleTo(from, to) {
   return Math.atan2(to.x - from.x, to.z - from.z);
 }
 
+// Deterministic hash in [0,1) from a tile position + index — seeds mote motion
+// so an absorb/create burst always animates identically for a given square (no
+// per-frame randomness, so nothing flickers and replays stay reproducible).
+function moteHash(x, z, i) {
+  let h = (Math.imul(x | 0, 73856093) ^ Math.imul(z | 0, 19349663) ^ Math.imul(i | 0, 83492791)) >>> 0;
+  h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995) >>> 0; h ^= h >>> 15;
+  return (h >>> 0) / 4294967296;
+}
+
 function distanceSq(a, b) {
   const dx = a.x - b.x;
   const dz = a.z - b.z;
@@ -230,6 +239,7 @@ export class Game {
       type: object.type, x: object.x, z: object.z, y: object.y,
       facing: object.facing ?? 0, dissolve: 1,
     });
+    this._emitMotes(object.x, object.z, object.y ?? this.world.surfaceY(object.x, object.z), 'absorb');
     this._event('absorb');
     return true;
   }
@@ -286,6 +296,7 @@ export class Game {
       return false;
     }
     this.energy -= cost;
+    this._emitMotes(object.x, object.z, object.y ?? this.world.surfaceY(object.x, object.z), 'create');
     this._message(`Created ${type}`);
     this._event('create');
     return true;
@@ -464,6 +475,41 @@ export class Game {
         meanie.radius = undefined;
         this._message('Meanie forced hyperspace');
         this._hyperspace();
+      }
+    }
+  }
+
+  // Spawn a burst of visual energy motes (presentation only — pushed to
+  // world.motes, which the renderer projects and main.js ages/culls each frame).
+  //   mode 'absorb':  motes rise from the square and shrink (energy drawn out).
+  //   mode 'create':  motes fall inward from above INTO the new object.
+  // Motion is seeded from the tile position so it is fully deterministic.
+  _emitMotes(x, z, y, mode) {
+    const motes = this.world.motes;
+    if (!motes) return;
+    const cx = x + 0.5, cz = z + 0.5;
+    const LIFE = 0.8;
+    const count = 12 + Math.floor(moteHash(x, z, 7) * 5); // 12..16
+    for (let i = 0; i < count; i += 1) {
+      const ang = moteHash(x, z, i) * Math.PI * 2;
+      const rad = 0.12 + moteHash(z, x, i) * 0.26;
+      const spd = moteHash(x + 5, z + 9, i);
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      if (mode === 'absorb') {
+        motes.push({
+          x: cx + ca * rad * 0.5, y: y + 0.2 + spd * 0.4, z: cz + sa * rad * 0.5,
+          vx: ca * (0.15 + spd * 0.25), vy: 0.9 + spd * 0.7, vz: sa * (0.15 + spd * 0.25),
+          g: 0.5, size: 0.05, mode, age: 0, life: LIFE,
+        });
+      } else {
+        // Start spread out and high, converge to just above the base by end-of-life.
+        const startY = y + 1.0 + spd * 0.8;
+        const outR = rad + 0.35;
+        motes.push({
+          x: cx + ca * outR, y: startY, z: cz + sa * outR,
+          vx: -ca * outR / LIFE, vy: -(startY - (y + 0.3)) / LIFE, vz: -sa * outR / LIFE,
+          g: 0, size: 0.05, mode, age: 0, life: LIFE,
+        });
       }
     }
   }

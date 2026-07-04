@@ -98,6 +98,13 @@ export class World {
     // Visual-only ghosts of absorbed objects (dissolve 1 -> 0); the renderer
     // draws them, nothing else ever consults them.
     this.effects = [];
+    // Visual-only energy motes (absorb/create bursts). A flat list of tiny
+    // particles the renderer projects as 2-3px sprites; nothing else reads them.
+    // Kept as a SEPARATE array from `effects` on purpose: `effects` entries are
+    // full mesh-bearing ghost objects the renderer instances, whereas motes are
+    // primitive point sprites — mixing the two would force the object emitter to
+    // branch on shape. Both are equally "presentation-only".
+    this.motes = [];
     this._nextObjectId = 1;
   }
 

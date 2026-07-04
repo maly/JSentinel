@@ -412,6 +412,58 @@ const STYLE = `
   color: #a8d8b0;
   margin-top: 6px;
 }
+
+/* ---------- screen-transition fader (black wipe) ---------- */
+.hud-fader {
+  position: absolute;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 300ms ease;
+}
+
+/* ---------- level intro title ("LANDSCAPE NNNN") ---------- */
+/* Big centred CRT title that rises in, holds, then drifts up and fades. Matches
+   the green phosphor look of the end screens. Removed on animationend. */
+.hud-intro-title {
+  position: absolute;
+  top: 30%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 40px;
+  letter-spacing: 0.24em;
+  color: #9fffb0;
+  text-shadow: 0 0 16px rgba(120, 255, 140, 0.7), 0 0 4px rgba(0, 0, 0, 0.9);
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: hud-intro 2.2s ease forwards;
+}
+
+@keyframes hud-intro {
+  0%   { opacity: 0; transform: translateY(14px) scale(0.96); }
+  16%  { opacity: 1; transform: translateY(0) scale(1); }
+  68%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-42px) scale(1.03); }
+}
+
+/* ---------- energy tick feedback (drain / gain) ---------- */
+.hud-energy.drain { animation: hud-energy-drain 0.3s ease; }
+.hud-energy.gain  { animation: hud-energy-gain 0.3s ease; }
+
+@keyframes hud-energy-drain {
+  0%   { filter: none; }
+  25%  { filter: brightness(1.35) drop-shadow(0 0 6px rgba(255, 64, 48, 0.95)); }
+  100% { filter: none; }
+}
+
+@keyframes hud-energy-gain {
+  0%   { transform: scale(1); filter: none; }
+  40%  { transform: scale(1.16); filter: drop-shadow(0 0 6px rgba(120, 255, 150, 0.9)); }
+  100% { transform: scale(1); filter: none; }
+}
 `;
 
 function ensureStyleInjected() {
@@ -499,15 +551,35 @@ export function createHud(overlayEl) {
   screenEl.style.display = 'none';
   overlayEl.appendChild(screenEl);
 
+  // Appended LAST so it sits above the screens: a full-frame black wipe used for
+  // state transitions (menu<->game, restart, end screens).
+  const faderEl = document.createElement('div');
+  faderEl.className = 'hud-fader';
+  overlayEl.appendChild(faderEl);
+
   let messageTimer = null;
   let flashTimer = null;
   let scanState = 0;
   let lastSentinelAlive = null;
   let lastSentryCount = null;
+  let lastEnergy = null;        // for the drain/gain energy-tick diff
+  let energyTickTimer = null;
 
-  function setEnergy(n) {
+  // opts.silent: set the baseline without playing a drain/gain tick (used when a
+  // new level resets the energy — otherwise the jump would flash a false gain).
+  function setEnergy(n, opts = {}) {
     energyRow.innerHTML = '';
     energyRow.classList.toggle('low', n <= 3 && n >= 0);
+
+    if (!opts.silent && lastEnergy !== null && n !== lastEnergy) {
+      const cls = n < lastEnergy ? 'drain' : 'gain';
+      energyRow.classList.remove('drain', 'gain');
+      void energyRow.offsetWidth;              // reflow so the animation restarts
+      energyRow.classList.add(cls);
+      if (energyTickTimer) clearTimeout(energyTickTimer);
+      energyTickTimer = setTimeout(() => energyRow.classList.remove('drain', 'gain'), 320);
+    }
+    lastEnergy = n;
 
     let remaining = Math.max(0, Math.floor(n));
 
@@ -784,10 +856,39 @@ export function createHud(overlayEl) {
     });
   }
 
+  // ---- screen transitions ------------------------------------------------
+  // Drive the black fader to opaque (fadeOut) or clear (fadeIn); `cb` fires when
+  // the transition of length `ms` completes. main.js sequences these into a
+  // fade-out -> swap -> fade-in around newGame()/showScreen()/goToMenu().
+  function fadeOut(ms = 300, cb) {
+    faderEl.style.transition = `opacity ${ms}ms ease`;
+    void faderEl.offsetWidth;
+    faderEl.style.opacity = '1';
+    if (cb) setTimeout(cb, ms);
+  }
+  function fadeIn(ms = 300, cb) {
+    faderEl.style.transition = `opacity ${ms}ms ease`;
+    void faderEl.offsetWidth;
+    faderEl.style.opacity = '0';
+    if (cb) setTimeout(cb, ms);
+  }
+
+  // Big centred level-intro title; self-removes when its CSS animation ends.
+  function showIntroTitle(text) {
+    const el = document.createElement('div');
+    el.className = 'hud-intro-title';
+    el.textContent = text;
+    overlayEl.appendChild(el);
+    const remove = () => { if (el.parentNode) el.parentNode.removeChild(el); };
+    el.addEventListener('animationend', remove);
+    setTimeout(remove, 2600);   // safety net if animationend is missed
+  }
+
   return {
     setEnergy, showMessage, setScanState, setScanned, setWatchers, flash,
     showScreen, showSplash, showMenu, showCode,
     showSettings, setSettingValue, setSettingSelection,
+    fadeOut, fadeIn, showIntroTitle,
     menuOptionCount: MENU_OPTIONS.length,
   };
 }

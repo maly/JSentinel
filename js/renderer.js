@@ -587,12 +587,44 @@ export const MESHES = {
 };
 
 // ---- Objects ------------------------------------------------------------
-// Map a `dissolve` value in [0,1] to a draw alpha. undefined / >= 1 => solid
-// (alpha 1). Values in (0,1) step to quarters for a cheap retro scanline-dither
-// look. Callers must skip objects whose dissolve <= 0 (fully gone) themselves.
-function dissolveAlpha(d) {
-  if (d === undefined || d === null || d >= 1) return 1;
-  return Math.ceil(d * 4) / 4;
+// Dither dissolve. Instead of fading a whole object's alpha (which visibly
+// steps/blinks), an object with 0 < dissolve < 1 is revealed through horizontal
+// scanline bands over its own projected vertical span. The set of visible bands
+// is a pure function of SCREEN position + dissolve — never of draw order or
+// frame time — so it is:
+//   * coherent across all of an object's faces even though the global painter's
+//     sort interleaves them with other objects' and terrain polys (each face
+//     clips to the same screen-space band set), and
+//   * deterministic and non-blinking (no per-frame randomness).
+// Direction falls out of one rule: the BOTTOM of the object persists longest.
+// That gives materialization a bottom-up wipe (dissolve 0->1) and absorption a
+// top-down wipe (dissolve 1->0) with a single threshold formula, since in both
+// the visible fraction equals `dissolve`. A 1-D ordered (bit-reversal) dither
+// ragged-edges the moving boundary so it reads as retro stipple, not a hard line.
+const DITHER_BANDS = 16;      // must stay a power of two (bit-reversal below)
+const DITHER_SOFT = 0.5;      // 0 = hard wipe line, 1 = fully dispersed stipple
+// 4-bit reversal: disperses band order so bands fill in interlaced, not sweeping.
+function bitrev4(i) {
+  return ((i & 1) << 3) | ((i & 2) << 1) | ((i & 4) >> 1) | ((i & 8) >> 3);
+}
+// Clip the current context to the visible dither bands of a dissolving poly.
+// dsTop/dsBot are the object's min/max projected screen-y; d is its dissolve.
+function applyDitherClip(ctx, poly) {
+  const yt = poly.dsTop, yb = poly.dsBot, d = poly.diss;
+  const span = yb - yt;
+  if (!(span > 0)) return;              // degenerate: leave unclipped
+  const h = span / DITHER_BANDS;
+  ctx.beginPath();
+  for (let i = 0; i < DITHER_BANDS; i += 1) {
+    // band i: 0 = top strip .. N-1 = bottom strip
+    const posFrac = (i + 0.5) / DITHER_BANDS;             // 0 top .. 1 bottom
+    const bayer = (bitrev4(i) + 0.5) / DITHER_BANDS;      // dispersed 0..1
+    // Bottom persists longest -> threshold decreases toward the bottom; the
+    // bayer term dithers the transition edge.
+    const threshold = (1 - posFrac) * (1 - DITHER_SOFT) + bayer * DITHER_SOFT;
+    if (threshold < d) ctx.rect(0, yt + i * h, VIEW_W, h + 1);
+  }
+  ctx.clip();
 }
 
 // Contact shadow: a flat dark octagon just above the object's resting surface,
@@ -619,7 +651,9 @@ function emitContactShadow(list, view, cx, cz, baseY, radius, alpha) {
 function emitObject(list, view, world, o) {
   const mesh = MESHES[o.type];
   if (!mesh) return;
-  const alpha = dissolveAlpha(o.dissolve);
+  const d = o.dissolve;
+  const dissolving = (typeof d === 'number' && d > 0 && d < 1);
+  const solidFactor = dissolving ? d : 1;   // shadow fades smoothly (no dither)
   // Base surface Y for this object: world.js assigns each object its
   // resting world-Y in o.y (stack-aware). Fall back to terrain height.
   let baseY;
@@ -635,9 +669,16 @@ function emitObject(list, view, world, o) {
   const px = o.x + 0.5, pz = o.z + 0.5;
   // Contact shadow on the resting surface, fading with the object's dissolve.
   const footprint = (o.radius ?? 0.35) * 1.05;
-  emitContactShadow(list, view, px, pz, baseY, footprint, 0.25 * alpha);
-  const yaw = o.rotY ?? o.facing ?? 0;
+  emitContactShadow(list, view, px, pz, baseY, footprint, 0.25 * solidFactor);
+  // Presentation-only facing: watchers carry a tweened `_displayFacing` (see
+  // main.js) so their 30-degree logic steps read as a smooth rotation. It NEVER
+  // feeds game/world logic — only this draw transform and the shading normal.
+  const yaw = o._displayFacing ?? o.rotY ?? o.facing ?? 0;
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  // A dissolving object's faces are collected into a temp list first so we can
+  // measure its projected vertical span, then tagged for the dither clip. Solid
+  // objects go straight to the shared list (no extra allocation).
+  const sink = dissolving ? [] : list;
   for (const face of mesh) {
     const wv = new Array(face.v.length);
     const bright = localFaceBrightness(face.v, yaw);
@@ -648,7 +689,20 @@ function emitObject(list, view, world, o) {
       const rz = -sy * lv[0] + cy * lv[2];
       wv[i] = { x: px + rx, y: baseY + lv[1], z: pz + rz };
     }
-    buildPoly(list, view, wv, shade(face.c, bright), true, null, face.depthMode ?? 'avg', alpha);
+    buildPoly(sink, view, wv, shade(face.c, bright), true, null, face.depthMode ?? 'avg');
+  }
+  if (dissolving) {
+    let yt = Infinity, yb = -Infinity;
+    for (const p of sink) {
+      for (const pt of p.pts) {
+        if (pt.y < yt) yt = pt.y;
+        if (pt.y > yb) yb = pt.y;
+      }
+    }
+    for (const p of sink) {
+      p.diss = d; p.dsTop = yt; p.dsBot = yb;
+      list.push(p);
+    }
   }
 }
 
@@ -667,6 +721,37 @@ function collectObjects(list, view, world, skipObjectId = null) {
   for (const o of effects) {
     if (o.dissolve !== undefined && o.dissolve <= 0) continue;
     emitObject(list, view, world, o);
+  }
+}
+
+// ---- Energy motes -------------------------------------------------------
+// Project world.motes (absorb/create particle bursts) into the poly list as
+// tiny screen-space sprites. Each entry is drawn as a 2-3px fillRect, depth-
+// sorted alongside real polys so nearer motes paint over farther geometry.
+// Position is a pure function of the mote's age (main.js advances/culls it), so
+// motion is smooth at 60fps and deterministic. Colour is a bright, palette-tied
+// warm-white so the burst reads as "energy" against any landscape.
+function collectMotes(list, view, motes) {
+  if (!motes || motes.length === 0) return;
+  const pal = activePalette();
+  const warm = rgbStr(lerpRgb(pal.skyHorizon, [255, 244, 214], 0.78));
+  for (const m of motes) {
+    const t = m.age / m.life;
+    if (t >= 1 || t < 0) continue;
+    const wx = m.x + m.vx * m.age;
+    const wy = m.y + m.vy * m.age - 0.5 * m.g * m.age * m.age;
+    const wz = m.z + m.vz * m.age;
+    const vv = view.toView({ x: wx, y: wy, z: wz });
+    if (vv.z <= NEAR) continue;
+    const s = projectView(vv);
+    const shrink = m.mode === 'absorb' ? (1 - 0.55 * t) : 1;
+    let px = (m.size * FOCAL / vv.z) * shrink;
+    px = px < 1 ? 1 : (px > 3 ? 3 : px);
+    // Fade in briefly then out; absorb motes fade harder as they rise away.
+    const alpha = m.mode === 'absorb'
+      ? Math.max(0, 1 - t * t)
+      : Math.min(1, 2.2 * (1 - t));
+    list.push({ mote: true, x: s.x, y: s.y, size: px, fill: warm, alpha, depth: vv.z });
   }
 }
 
@@ -728,6 +813,7 @@ export function render(ctx, world, camera, uiState = {}) {
   const list = [];
   collectTerrain(list, view, world, uiState.pickTile || null, pickPulse);
   collectObjects(list, view, world, uiState.skipObjectId ?? null);
+  collectMotes(list, view, world.motes);
 
   // Painter's algorithm: draw far polygons first.
   list.sort((a, b) => b.depth - a.depth);
@@ -735,17 +821,30 @@ export function render(ctx, world, camera, uiState = {}) {
   ctx.lineJoin = 'round';
   ctx.lineWidth = 1;
   for (const poly of list) {
+    // Energy mote: a tiny depth-sorted sprite, no outline.
+    if (poly.mote) {
+      if (poly.alpha <= 0) continue;
+      ctx.globalAlpha = poly.alpha;
+      ctx.fillStyle = poly.fill;
+      ctx.fillRect(poly.x - poly.size * 0.5, poly.y - poly.size * 0.5, poly.size, poly.size);
+      ctx.globalAlpha = 1;
+      continue;
+    }
     const pts = poly.pts;
+    // Dithering object: clip to its visible scanline bands before filling.
+    const dith = poly.diss !== undefined;
+    if (dith) { ctx.save(); applyDitherClip(ctx, poly); }
+    else if (poly.alpha !== 1) ctx.globalAlpha = poly.alpha;
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
     ctx.closePath();
-    if (poly.alpha !== 1) ctx.globalAlpha = poly.alpha;
     ctx.fillStyle = poly.fill;
     ctx.fill();
     ctx.strokeStyle = poly.stroke;   // 1px darker outline for the vector look
     ctx.stroke();
-    if (poly.alpha !== 1) ctx.globalAlpha = 1;
+    if (dith) ctx.restore();
+    else if (poly.alpha !== 1) ctx.globalAlpha = 1;
   }
 
   if (uiState.crosshair) {

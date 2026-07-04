@@ -23,6 +23,10 @@ const PITCH_LIMIT = Math.PI / 3;
 const YAW_TWEEN_RATE = 10;
 // Drain shake: exp decay ~0.5s (rate 5 => e^-2.5 after 0.5s). Render-only.
 const SHAKE_DECAY = 5;
+// Watcher facing tween: exponential approach of the render-only `_displayFacing`
+// toward the logic `facing`. rate 6 => ~e^-2.4 (≈9% left) after 0.4s, so each
+// discrete 30° logic step reads as a ~0.4s smooth turn. Presentation ONLY.
+const WATCHER_FACE_RATE = 6;
 function angleDiff(from, to) {
   let d = (to - from) % (Math.PI * 2);
   if (d > Math.PI) d -= Math.PI * 2;
@@ -109,6 +113,10 @@ let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, targetYaw: 0 };
 // Jump-turn tween + drain-shake state (render/camera only, never logic/pick).
 let yawTweening = false;
 let shake = 0;
+// Screen-transition + won-cinematic state. `fading` is true while a black wipe
+// is in flight (blocks stray Enter). `cinematic` holds the win dissolve wave.
+let fading = false;
+let cinematic = null;
 let level = seedLink.level;   // 0000-9999
 let nextLevel = null;         // set when a level is won
 
@@ -256,15 +264,102 @@ function newGame() {
   music.setMode('game');
   lastScanState = 0;
   nextLevel = null;
+  cinematic = null;
   hud.showScreen(null);
-  hud.setEnergy(game.energy);
-  hud.showMessage(`LANDSCAPE ${formatLevel(level)}`, 3000);
+  hud.setEnergy(game.energy, { silent: true });   // baseline, no drain/gain tick
+  hud.showIntroTitle(`LANDSCAPE ${formatLevel(level)}`);
 }
 
 function syncCamera() {
   camera.x = game.camera.x + 0.5;
   camera.z = game.camera.z + 0.5;
   camera.y = game.camera.eyeY;
+}
+
+// ---- Presentation transitions & cinematics -----------------------------
+
+// fade-out -> run `mid` while the screen is black -> fade back in. `fading`
+// blocks input for the whole sequence so a stray Enter can't double-fire.
+function fadeTo(mid, opts = {}) {
+  const out = opts.out ?? 300;
+  const hold = opts.hold ?? 0;
+  const inMs = opts.in ?? 300;
+  fading = true;
+  hud.fadeOut(out, () => {
+    if (mid) mid();
+    setTimeout(() => {
+      hud.fadeIn(inMs, () => { fading = false; });
+    }, hold);
+  });
+}
+
+// Won cinematic: freeze the world (game has already stopped ticking once state
+// leaves 'playing') and dissolve every object away in a wave spreading outward
+// from the player, using the renderer's dither (task 1) on a PRESENTATION-only
+// `dissolve` value. Real objects are never removed — the world is rebuilt on the
+// next level. `onDone` fires when the wave finishes (to fade in the won screen).
+function beginWonCinematic(onDone) {
+  state = 'won';            // stops logic + gameplay input; screen shown later
+  hud.showScreen(null);     // ensure no overlay screen is up during the wave
+  const dur = 1.8;
+  const fade = 0.55;        // per-object fade-out duration
+  const px = game.camera.x + 0.5;
+  const pz = game.camera.z + 0.5;
+  let maxD = 1;
+  for (const o of world.objects) {
+    const dx = o.x + 0.5 - px;
+    const dz = o.z + 0.5 - pz;
+    o._wonDist = Math.hypot(dx, dz);
+    if (o._wonDist > maxD) maxD = o._wonDist;
+  }
+  for (const o of world.objects) {
+    o._wonDelay = (o._wonDist / maxD) * (dur - fade);
+    if (o.dissolve === undefined) o.dissolve = 1; // start solid, fade presentationally
+  }
+  cinematic = { t: 0, dur, fade, onDone };
+}
+
+// Advance the won-cinematic dissolve wave. Called every frame while active.
+function updateCinematic(dt) {
+  if (!cinematic || !world) return;
+  cinematic.t += dt;
+  const { t, fade } = cinematic;
+  for (const o of world.objects) {
+    if (o._wonDelay === undefined) continue;
+    const local = t - o._wonDelay;
+    let dv = 1 - local / fade;
+    dv = dv > 1 ? 1 : (dv < 0 ? 0 : dv);   // 0 => renderer skips it (fully gone)
+    o.dissolve = dv;
+  }
+  if (cinematic.t >= cinematic.dur) {
+    const done = cinematic.onDone;
+    cinematic = null;
+    if (done) done();
+  }
+}
+
+// Smoothly tween each watcher's render-only `_displayFacing` toward its logic
+// `facing`. Runs at frame rate for smoothness; never touches `facing` itself, so
+// LOS/canSee logic (which reads only `facing`) is unaffected. New watchers snap
+// to their spawn facing (no start-of-level spin).
+function updateWatcherFacing(dt) {
+  if (!world) return;
+  const k = 1 - Math.exp(-dt * WATCHER_FACE_RATE);
+  for (const o of world.objects) {
+    if (o.type !== 'sentinel' && o.type !== 'sentry') continue;
+    if (o._displayFacing === undefined) { o._displayFacing = o.facing ?? 0; continue; }
+    o._displayFacing += angleDiff(o._displayFacing, o.facing ?? 0) * k;
+  }
+}
+
+// Age and cull visual energy motes (presentation-only; see game._emitMotes).
+function updateMotes(dt) {
+  const motes = world && world.motes;
+  if (!motes || !motes.length) return;
+  for (let i = motes.length - 1; i >= 0; i -= 1) {
+    motes[i].age += dt;
+    if (motes[i].age >= motes[i].life) motes.splice(i, 1);
+  }
 }
 
 // ---- Splash / menu / code navigation ----------------------------------
@@ -304,7 +399,7 @@ function leaveSplash() {
 
 function activateMenu(i) {
   audio.play('menuSelect');                      // confirm — keyboard Enter or mouse click
-  if (i === 0) { level = 0; newGame(); }        // START GAME — classic level 0000
+  if (i === 0) { fadeTo(() => { level = 0; newGame(); }); } // START GAME — classic 0000
   else if (i === 1) { goToCode(); }             // ENTER CODE
   else { openSettings('menu'); }                // SETTINGS
 }
@@ -342,12 +437,15 @@ function confirmCode() {
     return;
   }
   level = lvl;
-  newGame();
+  fadeTo(() => newGame());
 }
 
 function onMenuKeyDown(e) {
   const code = e.code;
   const isEnter = code === 'Enter' || code === 'NumpadEnter';
+
+  // Swallow input while a transition wipe or the won cinematic is in flight.
+  if (fading || cinematic) { e.preventDefault(); return; }
 
   if (state === 'splash') {
     unlockAudio();
@@ -432,7 +530,7 @@ function onMenuKeyDown(e) {
 
   // Bonus: Escape from an end screen returns to the menu (Enter still restarts).
   if (state === 'won' || state === 'dead' || state === 'complete') {
-    if (code === 'Escape') { e.preventDefault(); goToMenu(); }
+    if (code === 'Escape') { e.preventDefault(); fadeTo(() => goToMenu()); }
   }
 }
 
@@ -475,6 +573,7 @@ window.addEventListener('keydown', (e) => {
 // Optional mouse support on the splash and menu screens.
 overlayEl.addEventListener('click', (e) => {
   unlockAudio();
+  if (fading || cinematic) return;
   if (state === 'splash') { leaveSplash(); return; }
   if (state === 'menu') {
     const opt = e.target.closest('.hud-menu-option');
@@ -600,11 +699,13 @@ function frame(now) {
   } else
   for (const action of actions) {
     if (action === 'start') {
-      if (state !== 'playing') {
-        if (state === 'won' && nextLevel !== null) level = nextLevel;
-        else if (state === 'complete') level = 0;   // fresh run after finishing
-        // 'dead' and 'title' replay/start the current level unchanged
-        newGame();
+      if (state !== 'playing' && !fading && !cinematic) {
+        fadeTo(() => {
+          if (state === 'won' && nextLevel !== null) level = nextLevel;
+          else if (state === 'complete') level = 0;   // fresh run after finishing
+          // 'dead' replays the current level unchanged
+          newGame();
+        });
       }
       continue;
     }
@@ -681,31 +782,47 @@ function frame(now) {
     if (game.status === 'won') {
       // A level was completed: the current theme advances to the next one at
       // its end (theme5 -> theme1). Fires once — the win block is gated by
-      // state==='playing', which no longer holds after we switch below.
+      // state==='playing', which beginWonCinematic() clears immediately below.
       music.onLevelWon();
       // Original progression: next level = current + remaining energy.
       // Past level 9999 there is nowhere further to go — the game is done.
       const code = levelToSeed(level);
-      const target = level + game.energy;
-      if (target > 9999) {
-        state = 'complete';
-        hud.showScreen('complete', [
-          `LANDSCAPE ${formatLevel(level)} — REPLAY CODE ${formatSeed(code)}`,
-          `FINAL ENERGY ${game.energy}`,
-        ]);
-      } else {
-        state = 'won';
-        nextLevel = target;
-        hud.showScreen('won', [
-          `REPLAY CODE ${formatSeed(code)}`,
-          `NEXT LANDSCAPE ${formatLevel(target)}`,
-        ]);
-      }
+      const energy = game.energy;
+      const target = level + energy;
+      // Cinematic dissolve wave (~1.8s), THEN fade into the appropriate screen.
+      beginWonCinematic(() => {
+        if (target > 9999) {
+          state = 'complete';
+          fadeTo(() => hud.showScreen('complete', [
+            `LANDSCAPE ${formatLevel(level)} — REPLAY CODE ${formatSeed(code)}`,
+            `FINAL ENERGY ${energy}`,
+          ]));
+        } else {
+          state = 'won';
+          nextLevel = target;
+          fadeTo(() => hud.showScreen('won', [
+            `REPLAY CODE ${formatSeed(code)}`,
+            `NEXT LANDSCAPE ${formatLevel(target)}`,
+          ]));
+        }
+      });
     } else if (game.status === 'dead') {
+      // Switch state immediately (stops logic/input), but let the death sound
+      // land: hold on black briefly, then reveal the dead screen.
       state = 'dead';
-      hud.showScreen('dead', [`REPLAY CODE ${formatSeed(levelToSeed(level))}`]);
+      fadeTo(() => hud.showScreen('dead', [`REPLAY CODE ${formatSeed(levelToSeed(level))}`]),
+        { hold: 500 });
     }
   }
+
+  // Presentation-only per-frame updates (run in every state so they keep
+  // animating through the won cinematic and end screens):
+  //   * watcher facing tween (render-only `_displayFacing`),
+  //   * energy-mote aging/culling,
+  //   * won-cinematic dissolve wave.
+  updateWatcherFacing(dt);
+  updateMotes(dt);
+  updateCinematic(dt);
 
   // Drain shake: a render-ONLY yaw/pitch jitter with exponential decay. It must
   // never leak into camera (pick/logic already used the true camera above), so
