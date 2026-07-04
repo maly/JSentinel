@@ -52,10 +52,34 @@ function now(ctx) {
   return ctx.currentTime;
 }
 
+// 10%-duty pulse wave via Fourier series — WebAudio oscillators have no duty
+// parameter, but a PeriodicWave with sin(n*pi*d) harmonics is exactly a pulse
+// train. Far mellower than sawtooth/square for the dissolve sounds.
+const pulseWaveCache = new WeakMap();
+function pulseWave(ctx, duty = 0.1) {
+  let byDuty = pulseWaveCache.get(ctx);
+  if (!byDuty) { byDuty = new Map(); pulseWaveCache.set(ctx, byDuty); }
+  if (!byDuty.has(duty)) {
+    const N = 32;
+    const real = new Float32Array(N);
+    const imag = new Float32Array(N);
+    for (let n = 1; n < N; n++) {
+      imag[n] = (2 / (n * Math.PI)) * Math.sin(n * Math.PI * duty);
+    }
+    byDuty.set(duty, ctx.createPeriodicWave(real, imag));
+  }
+  return byDuty.get(duty);
+}
+
 // Create an oscillator + its own gain envelope, connected to `dest`.
-function tone(ctx, dest, { type = 'sine', freq = 440, start = 0, dur = 0.2 }) {
+// `type: 'pulse'` selects the 10%-duty pulse wave (optionally `duty`).
+function tone(ctx, dest, { type = 'sine', freq = 440, start = 0, dur = 0.2, duty = 0.1 }) {
   const osc = ctx.createOscillator();
-  osc.type = type;
+  if (type === 'pulse') {
+    osc.setPeriodicWave(pulseWave(ctx, duty));
+  } else {
+    osc.type = type;
+  }
   const t0 = now(ctx) + start;
   osc.frequency.setValueAtTime(freq, t0);
 
@@ -123,11 +147,11 @@ function noiseSource(ctx, dest, dur, { filterType = 'lowpass', filterFreq = 2000
 function buzzLayer(ctx, dest, { dur = 1.2, base = 70, peak = 0.25 } = {}) {
   const t0 = now(ctx);
 
-  const { osc, gain } = tone(ctx, dest, { type: 'sawtooth', freq: base, dur });
-  envelope(gain, t0, { peak, attack: 0.05, dur });
+  const { gain } = tone(ctx, dest, { type: 'pulse', duty: 0.15, freq: base, dur });
+  envelope(gain, t0, { peak, attack: 0.08, dur });
 
-  const { gain: gain2 } = tone(ctx, dest, { type: 'square', freq: base * 1.02, dur });
-  envelope(gain2, t0, { peak: peak * 0.7, attack: 0.05, dur });
+  const { gain: gain2 } = tone(ctx, dest, { type: 'pulse', duty: 0.1, freq: base * 1.02, dur });
+  envelope(gain2, t0, { peak: peak * 0.7, attack: 0.08, dur });
 
   const lfo = ctx.createOscillator();
   lfo.type = 'square';
@@ -141,16 +165,17 @@ function buzzLayer(ctx, dest, { dur = 1.2, base = 70, peak = 0.25 } = {}) {
 }
 
 function sfxAbsorb(ctx, dest) {
-  const dur = 0.5;
+  const dur = 0.6;
   const t0 = now(ctx);
 
-  const { osc, gain } = tone(ctx, dest, { type: 'sawtooth', freq: 900, dur });
-  freqSweep(osc, t0, 900, 140, dur);
-  envelope(gain, t0, { peak: 0.9, attack: 0.02, dur });
+  // Gentle 10%-duty pulse falling from a modest height — no sharp "tjou".
+  const { osc, gain } = tone(ctx, dest, { type: 'pulse', freq: 380, dur });
+  freqSweep(osc, t0, 380, 110, dur);
+  envelope(gain, t0, { peak: 0.7, attack: 0.08, dur });
 
-  const { osc: osc2, gain: gain2 } = tone(ctx, dest, { type: 'square', freq: 450, dur });
-  freqSweep(osc2, t0, 450, 90, dur);
-  envelope(gain2, t0, { peak: 0.5, attack: 0.02, dur });
+  const { osc: osc2, gain: gain2 } = tone(ctx, dest, { type: 'pulse', freq: 190, dur });
+  freqSweep(osc2, t0, 190, 70, dur);
+  envelope(gain2, t0, { peak: 0.45, attack: 0.08, dur });
 
   buzzLayer(ctx, dest, { base: 62 });
 }
@@ -159,13 +184,13 @@ function sfxCreate(ctx, dest) {
   const dur = 0.5;
   const t0 = now(ctx);
 
-  const { osc, gain } = tone(ctx, dest, { type: 'sawtooth', freq: 140, dur });
-  freqSweep(osc, t0, 140, 900, dur);
-  envelope(gain, t0, { peak: 0.9, attack: 0.02, dur });
+  const { osc, gain } = tone(ctx, dest, { type: 'pulse', freq: 110, dur });
+  freqSweep(osc, t0, 110, 380, dur);
+  envelope(gain, t0, { peak: 0.7, attack: 0.08, dur });
 
-  const { osc: osc2, gain: gain2 } = tone(ctx, dest, { type: 'square', freq: 90, dur });
-  freqSweep(osc2, t0, 90, 450, dur);
-  envelope(gain2, t0, { peak: 0.5, attack: 0.02, dur });
+  const { osc: osc2, gain: gain2 } = tone(ctx, dest, { type: 'pulse', freq: 70, dur });
+  freqSweep(osc2, t0, 70, 190, dur);
+  envelope(gain2, t0, { peak: 0.45, attack: 0.08, dur });
 
   buzzLayer(ctx, dest, { base: 78 });
 }
