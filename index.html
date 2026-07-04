@@ -9,6 +9,11 @@
     --scale: 1.75;
     --game-w: 512px;
     --game-h: 384px;
+    /* Max on-screen width (design size at --scale). */
+    --game-max-w: calc(var(--game-w) * var(--scale));
+    /* Vertical room reserved for the footer legend + margins, so the stage
+       always shrinks enough to keep the footer on screen on short viewports. */
+    --chrome-reserve: 110px;
   }
 
   html, body {
@@ -33,8 +38,18 @@
 
   #stage {
     position: relative;
-    width: calc(var(--game-w) * var(--scale));
-    height: calc(var(--game-h) * var(--scale));
+    /* Proportional 4:3 sizing. Width is the smallest of: the design size, the
+       viewport width, and the width implied by the available height once the
+       footer is accounted for. aspect-ratio derives the height, so the play
+       area (canvas + #overlay HUD, both 100% of #stage) always stays 4:3 and
+       fully visible — pure CSS, no JS resize handler. */
+    width: min(
+      var(--game-max-w),
+      96vw,
+      calc((100vh - var(--chrome-reserve)) * 4 / 3)
+    );
+    aspect-ratio: 4 / 3;
+    height: auto;
     box-shadow: 0 0 0 2px #274a2c, 0 0 40px rgba(80, 255, 120, 0.15);
     background: #000;
   }
@@ -74,14 +89,21 @@
     letter-spacing: 0.05em;
   }
 
+  /* The key-legend footer is shown only during gameplay screens; main.js adds
+     the .show-footer class to <body> for playing/won/dead/complete states. */
   footer {
+    display: none;
     margin-top: 18px;
-    max-width: calc(var(--game-w) * var(--scale));
+    max-width: var(--game-max-w);
     text-align: center;
     font-size: 12px;
     line-height: 1.7;
     color: #4f8a5a;
     letter-spacing: 0.04em;
+  }
+
+  body.show-footer footer {
+    display: block;
   }
 
   footer .key {

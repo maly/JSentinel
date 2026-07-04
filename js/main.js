@@ -10,6 +10,7 @@ import { createInput } from './input.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
 import { createMusic } from './music.js';
+import { createSettings } from './settings.js';
 import { levelToSeed, seedToLevel, formatLevel, formatSeed, parseSeed } from './levels.js';
 
 const LOGIC_HZ = 10;
@@ -64,6 +65,9 @@ const hud = createHud(document.getElementById('overlay'));
 const audio = createAudio();
 // Background music shares audio.js's single AudioContext (no second context).
 const music = createMusic(audio.context, audio.musicBus);
+// Audio volume settings (Master/Music/Effects) — loads any saved profile from
+// localStorage and pushes it into the audio bus graph immediately.
+const settings = createSettings(audio);
 const overlayEl = document.getElementById('overlay');
 // Browsers only allow audio after a user gesture. The splash/menu key & click
 // handlers below call unlockAudio() on every interaction (idempotent), so an
@@ -84,7 +88,7 @@ window.addEventListener('mousedown', unlockAudio, { once: true });
 //   'playing' -> 'won' | 'complete' | 'dead' (Enter restarts, Esc -> 'menu')
 // A valid ?seed= deep-links 'splash' -> 'playing' directly.
 const seedLink = urlSeed();
-let state = 'splash';         // 'splash' | 'menu' | 'code' | 'playing' | 'won' | 'complete' | 'dead'
+let state = 'splash';         // 'splash' | 'menu' | 'code' | 'playing' | 'won' | 'complete' | 'dead' | 'settings'
 let world = null;
 let game = null;
 let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0 };
@@ -94,6 +98,11 @@ let nextLevel = null;         // set when a level is won
 // Menu / code-entry transient state.
 let menuSelection = 0;
 let codeDigits = '';          // up to 8 typed digits
+
+// Settings-screen transient state. `settingsReturn` remembers where Esc came
+// from ('menu' or 'playing') so the second Esc lands back there unchanged.
+let settingsSelection = 0;
+let settingsReturn = 'menu';
 
 // ---- Level setup ----------------------------------------------------------
 // Terrain gives us bare tiles; the level itself (Sentinel on its pedestal on
@@ -274,8 +283,33 @@ function leaveSplash() {
 }
 
 function activateMenu(i) {
-  if (i === 0) { level = 0; newGame(); }   // START GAME — classic level 0000
-  else { goToCode(); }                     // ENTER CODE
+  if (i === 0) { level = 0; newGame(); }        // START GAME — classic level 0000
+  else if (i === 1) { goToCode(); }             // ENTER CODE
+  else { openSettings('menu'); }                // SETTINGS
+}
+
+// Open the volume-settings overlay. `from` ('menu' | 'playing') is where the
+// second Esc must return. Opening from gameplay does NOT reset or advance the
+// simulation — the frame loop simply stops ticking while state === 'settings',
+// leaving the last frame on screen. Music keeps flowing (mode untouched).
+function openSettings(from) {
+  settingsReturn = from;
+  settingsSelection = 0;
+  state = 'settings';
+  hud.showSettings(settings.all(), settingsSelection);
+}
+
+// Close settings and land back exactly where it was opened: the paused game
+// resumes untouched, or the menu reappears with its selection intact.
+function closeSettings() {
+  if (settingsReturn === 'playing') {
+    state = 'playing';
+    hud.showScreen(null);   // drop the overlay; the live HUD is underneath
+    last = performance.now(); // avoid a dt spike from the paused interval
+  } else {
+    state = 'menu';
+    hud.showMenu(menuSelection);
+  }
 }
 
 function confirmCode() {
@@ -331,6 +365,37 @@ function onMenuKeyDown(e) {
         hud.showCode(codeDisplay(codeDigits), '');
       }
     }
+    return;
+  }
+
+  if (state === 'settings') {
+    const item = settings.items[settingsSelection];
+    if (code === 'ArrowUp' || code === 'KeyW') {
+      e.preventDefault();
+      settingsSelection = (settingsSelection + settings.items.length - 1) % settings.items.length;
+      hud.setSettingSelection(settingsSelection);
+    } else if (code === 'ArrowDown' || code === 'KeyS') {
+      e.preventDefault();
+      settingsSelection = (settingsSelection + 1) % settings.items.length;
+      hud.setSettingSelection(settingsSelection);
+    } else if (code === 'ArrowLeft' || code === 'KeyA') {
+      e.preventDefault();
+      const v = settings.nudge(item.key, -settings.step);
+      hud.setSettingValue(settingsSelection, v);
+    } else if (code === 'ArrowRight' || code === 'KeyD') {
+      e.preventDefault();
+      const v = settings.nudge(item.key, settings.step);
+      hud.setSettingValue(settingsSelection, v);
+    } else if (code === 'Escape') {
+      e.preventDefault();
+      closeSettings();
+    }
+    return;
+  }
+
+  // In gameplay, Escape opens the settings overlay and pauses the simulation.
+  if (state === 'playing') {
+    if (code === 'Escape') { e.preventDefault(); openSettings('playing'); }
     return;
   }
 
@@ -394,6 +459,41 @@ overlayEl.addEventListener('mousemove', (e) => {
   }
 });
 
+// ---- Settings slider mouse control (click + drag) ----------------------
+let settingsDrag = null;      // { index, key, track } while dragging a slider
+
+function pctFromTrack(track, clientX) {
+  const rect = track.getBoundingClientRect();
+  if (rect.width <= 0) return 0;
+  return Math.max(0, Math.min(100, ((clientX - rect.left) / rect.width) * 100));
+}
+
+overlayEl.addEventListener('mousedown', (e) => {
+  if (state !== 'settings') return;
+  const row = e.target.closest('.hud-setting-row');
+  if (row) {
+    settingsSelection = Number(row.dataset.index);
+    hud.setSettingSelection(settingsSelection);
+  }
+  const track = e.target.closest('.hud-setting-track');
+  if (track) {
+    e.preventDefault();
+    const index = Number(track.dataset.index);
+    const key = track.dataset.key;
+    settingsDrag = { index, key, track };
+    const v = settings.setValue(key, pctFromTrack(track, e.clientX));
+    hud.setSettingValue(index, v);
+  }
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!settingsDrag) return;
+  const v = settings.setValue(settingsDrag.key, pctFromTrack(settingsDrag.track, e.clientX));
+  hud.setSettingValue(settingsDrag.index, v);
+});
+
+window.addEventListener('mouseup', () => { settingsDrag = null; });
+
 // ---- Loop -------------------------------------------------------------
 
 let last = performance.now();
@@ -403,6 +503,11 @@ let lastScanState = 0;
 function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
+
+  // The key-legend footer belongs to gameplay only; menu/code/settings screens
+  // hide it (CSS reacts to this body class). Idempotent — no reflow when steady.
+  const inGame = state === 'playing' || state === 'won' || state === 'dead' || state === 'complete';
+  document.body.classList.toggle('show-footer', inGame);
 
   // View rotation every frame for smoothness.
   if (state === 'playing') {
@@ -424,8 +529,10 @@ function frame(now) {
   // Discrete actions. Splash/menu/code run their own keydown listener, so
   // here we just drain and ignore input.js's queue in those states.
   const actions = input.pollActions();
-  if (state === 'splash' || state === 'menu' || state === 'code') {
-    // dropped on purpose
+  if (state === 'splash' || state === 'menu' || state === 'code' || state === 'settings') {
+    // dropped on purpose — these states run their own keydown listener, and
+    // 'settings' must never let a stray Enter reach newGame() (that would reset
+    // the paused game the player is about to return to).
   } else
   for (const action of actions) {
     if (action === 'start') {
@@ -531,6 +638,8 @@ window.__dbg = {
   camera,
   get world() { return world; },
   get game() { return game; },
+  get state() { return state; },
+  get settings() { return settings.all(); },
 };
 // Music debug hook: current track, planned successor, mode, format, ctx state.
 window.__music = music;

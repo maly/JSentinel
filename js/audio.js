@@ -4,17 +4,47 @@
 //   unlock(): void,        // create/resume AudioContext; call on first user gesture
 //   play(name): void,      // play a named sound; silent no-op before unlock()
 //   context(): AudioContext|null,   // the shared context (null before unlock)
-//   musicBus(): GainNode|null,      // master gain node — music routes UNDER it
+//   musicBus(): GainNode|null,      // music sub-bus — music routes UNDER it
+//   setVolumes({master,music,effects}): void, // 0..100 percentages (Settings)
 // }
+//
+// Bus graph:  destination <- master <- sfxBus  (SFX play() routes here)
+//                                    <- musicBus (music.js routes here)
+//
+// The three Settings sliders drive the three gain nodes. 100% on each slider
+// reproduces the pre-Settings balance exactly (effective SFX 0.25, effective
+// music 0.35*0.25 = 0.0875), so the mapping is:
+//   master node gain = MASTER_MAX * master%/100   (MASTER_MAX = old 0.25 master)
+//   sfxBus   node gain = effects%/100             (100% => unity)
+//   musicBus node gain = music%/100               (100% => unity; music.js keeps
+//                                                  its own 0.35 gain underneath)
 //
 // Sound names: 'absorb', 'create', 'transfer', 'hyperspace', 'drain',
 // 'seen', 'draining', 'meanie', 'uturn', 'won', 'dead'
 
-const MASTER_GAIN = 0.25;
+const MASTER_MAX = 0.25;   // gain of the master node when its slider is at 100%
 
 export function createAudio() {
   let ctx = null;
   let master = null;
+  let sfxBus = null;
+  let musicSub = null;
+
+  // Desired slider values (0..100). Applied live once the nodes exist; stored
+  // beforehand so Settings can be changed before the first user gesture.
+  const vols = { master: 100, music: 100, effects: 100 };
+
+  function clampPct(n) {
+    n = Number(n);
+    if (!Number.isFinite(n)) return 100;
+    return Math.max(0, Math.min(100, n));
+  }
+
+  function applyVolumes() {
+    if (master) master.gain.value = MASTER_MAX * vols.master / 100;
+    if (sfxBus) sfxBus.gain.value = vols.effects / 100;
+    if (musicSub) musicSub.gain.value = vols.music / 100;
+  }
 
   function unlock() {
     try {
@@ -23,8 +53,12 @@ export function createAudio() {
         if (!Ctor) return; // no WebAudio support — silent no-op forever
         ctx = new Ctor();
         master = ctx.createGain();
-        master.gain.value = MASTER_GAIN;
         master.connect(ctx.destination);
+        sfxBus = ctx.createGain();
+        sfxBus.connect(master);
+        musicSub = ctx.createGain();
+        musicSub.connect(master);
+        applyVolumes();
       }
       if (ctx.state === 'suspended') {
         ctx.resume().catch(() => {});
@@ -35,22 +69,32 @@ export function createAudio() {
   }
 
   function play(name) {
-    if (!ctx || !master) return; // play() before unlock() is a silent no-op
+    if (!ctx || !sfxBus) return; // play() before unlock() is a silent no-op
     const fn = SOUNDS[name];
     if (!fn) return;
     try {
-      fn(ctx, master);
+      fn(ctx, sfxBus);
     } catch (e) {
       // Swallow — a bad synth call should never crash the game.
     }
   }
 
-  // Expose the shared context + master gain so music.js can reuse them (one
+  // Update the Settings volumes (partial objects allowed). Applied instantly to
+  // the running graph so changes are audible while the slider is dragged.
+  function setVolumes(next) {
+    if (!next) return;
+    if (next.master !== undefined) vols.master = clampPct(next.master);
+    if (next.music !== undefined) vols.music = clampPct(next.music);
+    if (next.effects !== undefined) vols.effects = clampPct(next.effects);
+    applyVolumes();
+  }
+
+  // Expose the shared context + music sub-bus so music.js can reuse them (one
   // AudioContext for the whole app). Both are null until unlock() runs.
   function context() { return ctx; }
-  function musicBus() { return master; }
+  function musicBus() { return musicSub; }
 
-  return { unlock, play, context, musicBus };
+  return { unlock, play, context, musicBus, setVolumes };
 }
 
 // ---------- low-level helpers ----------

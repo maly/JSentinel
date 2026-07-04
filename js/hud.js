@@ -262,7 +262,8 @@ const STYLE = `
    so they opt back into pointer events that #overlay switches off. */
 .hud-screen.splash,
 .hud-screen.menu,
-.hud-screen.code {
+.hud-screen.code,
+.hud-screen.settings {
   pointer-events: auto;
   cursor: default;
 }
@@ -330,6 +331,74 @@ const STYLE = `
   letter-spacing: 0.12em;
   color: #4f8a5a;
 }
+
+/* ---------- settings (volumes) screen ---------- */
+.hud-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 10px 0 4px;
+  width: 300px;
+  max-width: 78%;
+}
+
+.hud-setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  color: #4f8a5a;
+}
+
+.hud-setting-row.selected {
+  color: #cfffd6;
+  border-color: #3a6a42;
+  text-shadow: 0 0 10px rgba(120, 255, 140, 0.5);
+}
+
+.hud-setting-label {
+  flex: 0 0 84px;
+  font-size: 14px;
+  letter-spacing: 0.14em;
+  text-align: left;
+}
+
+.hud-setting-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 12px;
+  border: 1px solid #3a6a42;
+  background: #0c1a0e;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.hud-setting-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0%;
+  background: #2f6b3a;
+}
+
+.hud-setting-row.selected .hud-setting-fill {
+  background: #4fbf5a;
+  box-shadow: 0 0 8px rgba(120, 255, 140, 0.4);
+}
+
+.hud-setting-value {
+  flex: 0 0 46px;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-align: right;
+}
+
+.hud-settings-hint {
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  color: #a8d8b0;
+  margin-top: 6px;
+}
 `;
 
 function ensureStyleInjected() {
@@ -373,7 +442,14 @@ const FOOTER_LINES = [
   'EKLEKTIK LABS 2026',
 ];
 
-const MENU_OPTIONS = ['START GAME', 'ENTER CODE'];
+const MENU_OPTIONS = ['START GAME', 'ENTER CODE', 'SETTINGS'];
+
+// Settings rows, in ↑↓ selection order. `key` matches settings.js item keys.
+const SETTINGS_ITEMS = [
+  { key: 'master', label: 'MASTER' },
+  { key: 'music', label: 'MUSIC' },
+  { key: 'effects', label: 'EFFECTS' },
+];
 
 export function createHud(overlayEl) {
   ensureStyleInjected();
@@ -616,9 +692,66 @@ export function createHud(overlayEl) {
     screenEl.style.display = 'flex';
   }
 
+  // display: settings screen with three volume sliders. `volumes` is the
+  // {master,music,effects} object (0..100); `selectedIndex` highlights a row.
+  // Rows carry data-key/data-index so main.js can map clicks/drags back.
+  // Returns nothing; call setSettingValue() to live-update a row while dragging.
+  let settingRowEls = [];
+  function showSettings(volumes, selectedIndex = 0) {
+    screenEl.className = 'hud-screen settings';
+    screenEl.innerHTML = '';
+    screenEl.appendChild(makeDiv('hud-screen-title', 'SETTINGS'));
+
+    const list = makeDiv('hud-settings');
+    settingRowEls = [];
+    SETTINGS_ITEMS.forEach((item, i) => {
+      const row = makeDiv(`hud-setting-row${i === selectedIndex ? ' selected' : ''}`);
+      row.dataset.key = item.key;
+      row.dataset.index = String(i);
+
+      const label = makeDiv('hud-setting-label', item.label);
+      const track = makeDiv('hud-setting-track');
+      track.dataset.key = item.key;
+      track.dataset.index = String(i);
+      const fill = makeDiv('hud-setting-fill');
+      track.appendChild(fill);
+      const value = makeDiv('hud-setting-value');
+
+      row.appendChild(label);
+      row.appendChild(track);
+      row.appendChild(value);
+      list.appendChild(row);
+
+      settingRowEls[i] = { row, fill, value };
+      setSettingValue(i, volumes[item.key] ?? 0);
+    });
+    screenEl.appendChild(list);
+
+    screenEl.appendChild(makeDiv('hud-settings-hint',
+      '↑↓ SELECT · ←→ ADJUST · DRAG · ESC BACK'));
+    screenEl.style.display = 'flex';
+  }
+
+  // Live update one settings row's fill width + numeric readout (no rebuild).
+  function setSettingValue(index, pct) {
+    const refs = settingRowEls[index];
+    if (!refs) return;
+    const clamped = Math.max(0, Math.min(100, Math.round(pct)));
+    refs.fill.style.width = `${clamped}%`;
+    refs.value.textContent = `${clamped}%`;
+  }
+
+  // Move the row highlight without rebuilding the whole screen.
+  function setSettingSelection(index) {
+    settingRowEls.forEach((refs, i) => {
+      if (refs) refs.row.classList.toggle('selected', i === index);
+    });
+  }
+
   return {
     setEnergy, showMessage, setScanState, setScanned, setWatchers,
     showScreen, showSplash, showMenu, showCode,
+    showSettings, setSettingValue, setSettingSelection,
     menuOptionCount: MENU_OPTIONS.length,
   };
 }
