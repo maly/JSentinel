@@ -17,7 +17,9 @@ const DEFAULT_RADIUS = 0.34;
 const OBJECT_HEIGHT = Object.freeze({
   tree: 3.0,    // tall pines, as in the original
   boulder: 1.0,
-  robot: 2.0,   // original proportions: a robot is two boulders tall
+  robot: 2.4,   // two boulders tall, +20% (raised so the eye clears the top
+                // face of a 2-boulder stack for top-face targeting; see
+                // EYE_HEIGHT.robot in game.js, kept consistent)
   meanie: 1.35,
   sentry: 2.0,   // a small sentinel, robot-sized
   sentinel: 2.2,

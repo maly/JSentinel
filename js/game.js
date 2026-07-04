@@ -27,7 +27,8 @@ const MEANIE_RANGE = 10;
 
 const EYE_HEIGHT = Object.freeze({
   tree: 1.15,
-  robot: 1.8,    // robot stands 2.0 tall (two boulders)
+  robot: 2.16,   // robot stands 2.4 tall (two boulders, +20%); kept above
+                 // 2.0 so the eye clears the top face of a 2-boulder stack
   sentry: 1.7,   // robot-sized mini sentinel
   sentinel: 1.9,
   meanie: 1.15,

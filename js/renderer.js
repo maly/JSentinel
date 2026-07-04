@@ -490,7 +490,11 @@ function humanoidMesh(bodyCol) {
   return faces;
 }
 
-function robotMesh() { return humanoidMesh(COL.robot); }
+// Robot stands 2.4 tall (world.js OBJECT_HEIGHT.robot): the shared humanoid
+// geometry is authored at 2.0 (matches meanie's use of the same base mesh),
+// so scale Y only by 1.2 (+20%) — footprint (X/Z) stays put, matching the
+// unchanged collision radius in world.js.
+function robotMesh() { return scaleFaces(humanoidMesh(COL.robot), 1, 1.2, 1); }
 
 function meanieMesh() {
   const faces = humanoidMesh(COL.meanie);

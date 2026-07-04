@@ -268,6 +268,33 @@ function testBuildAcceptsTopFaceViaRealRay() {
   assert.equal(game.energy, 20 - ENERGY.boulder);
 }
 
+// ROBOT EYE HEIGHT: the robot's eye must clear the top face of a 2-boulder
+// stack it stands NEXT to (not on top of) — that top face sits at world Y
+// 2.0, and the robot's standing eye height (2.16, i.e. 1.8 * 1.2) is derived
+// from EYE_HEIGHT.robot in game.js, kept >= that so a natural, gently
+// descending look lands as a genuine top-face hit, not a side hit forcing an
+// awkward angle. Uses the Game's own camera eyeY (no hand-forged eye) and a
+// flat terrain so the geometry is deterministic.
+function testRobotEyeClearsAdjacentStackTopFace() {
+  const world = new World(makeTiles(14, 14));
+  const game = new Game(world, { x: 0, z: 6, energy: 20 });
+  world.addObject({ type: 'boulder', x: 1, z: 6 });
+  const topBoulder = world.addObject({ type: 'boulder', x: 1, z: 6 }); // top at y=2.0
+
+  // Robot stands one tile away at (0,6); use the game's real camera eye
+  // (surfaceY + EYE_HEIGHT.robot), not a hand-picked height.
+  const eye = game._playerHeadPoint();
+  assert.ok(eye.y > 2.0, 'robot eye must sit above the 2-boulder stack top');
+
+  const pick = pickRay(world, eye, { x: 1.5, y: 1.95, z: 6.5 });
+  assert.equal(pick.object, topBoulder);
+  assert.equal(pick.face, 'top');
+
+  assert.equal(game.doAction('boulder', pick), true);
+  assert.equal(world.objectsAt(1, 6).length, 3); // stacked onto the top face
+  assert.equal(game.energy, 20 - ENERGY.boulder);
+}
+
 // FACE RULE — bottom-up SIDE hit on an ELEVATED object. A lone boulder sits on
 // a raised summit; the player on low ground aims UP at its flank. The ray
 // climbs into the side wall (never the top cap), so face === 'side' and build
@@ -546,6 +573,7 @@ testAbsorbTargetsSquareTopObject();
 testBuildOnStackViaTopFace();
 testBuildRejectsSideOfTopStone();
 testBuildAcceptsTopFaceViaRealRay();
+testRobotEyeClearsAdjacentStackTopFace();
 testBuildRejectsSideOfElevatedBoulderFromBelow();
 testAbsorbSideOfTopStoneStillWorks();
 testAbsorbLoneBoulderViaSquare();
