@@ -56,6 +56,8 @@ export class Game {
     this.energy = playerStart.energy ?? 10;
     this.status = 'playing';
     this.messages = [];
+    // Sound/FX event queue — drained by the presentation layer each frame.
+    this.events = [];
     this.scannedBySentinel = false;
     // 0 = sentinel can't see the player, 1 = sees the head only (can't
     // drain), 2 = sees the player's square and drains.
@@ -115,6 +117,7 @@ export class Game {
       case 'uturn':
         this.facing = (this.facing + Math.PI) % (Math.PI * 2);
         this._message('U-turn');
+        this._event('uturn');
         return true;
       default:
         this._message(`Unknown action: ${action}`);
@@ -187,6 +190,7 @@ export class Game {
       type: object.type, x: object.x, z: object.z, y: object.y,
       facing: object.facing ?? 0, dissolve: 1,
     });
+    this._event('absorb');
     return true;
   }
 
@@ -213,6 +217,7 @@ export class Game {
     }
     this.energy -= cost;
     this._message(`Created ${type}`);
+    this._event('create');
     return true;
   }
 
@@ -265,9 +270,11 @@ export class Game {
       && object.z === this._sentinelPedestal.z) {
       this.status = 'won';
       this._message('Landscape absorbed');
+      this._event('won');
       return true;
     }
     this._message('Transferred');
+    this._event('transfer');
     return true;
   }
 
@@ -282,6 +289,7 @@ export class Game {
     const destination = this._randomFlatTileAtOrBelow(currentHeight);
     if (destination) this._movePlayerTo(destination.x, destination.z);
     this._message('Hyperspace');
+    this._event('hyperspace');
     return true;
   }
 
@@ -353,6 +361,7 @@ export class Game {
   _drainPlayer() {
     this.energy -= 1;
     this._message('Sentinel drained energy');
+    this._event('drain');
     if (this.energy < 0) this._die('Energy depleted');
   }
 
@@ -413,6 +422,7 @@ export class Game {
     // the reaction window the original gives you.
     nearest.facing = angleTo(centerOf(nearest), player) + Math.PI;
     this._message('Tree became a meanie');
+    this._event('meanie');
   }
 
   _randomFlatTileAtOrBelow(maxHeight) {
@@ -519,10 +529,15 @@ export class Game {
   _die(message) {
     this.status = 'dead';
     this._message(message);
+    this._event('dead');
   }
 
   _message(message) {
     this.messages.push(message);
+  }
+
+  _event(type) {
+    this.events.push(type);
   }
 }
 

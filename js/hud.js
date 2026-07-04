@@ -6,6 +6,7 @@
 //   showMessage(text, ms): void,
 //   setScanState(state): void, // 0=unseen, 1=seen (head only), 2=draining
 //   setScanned(bool): void,    // deprecated alias: false->0, true->2
+//   setWatchers(sentinelAlive, sentryCount): void, // top-right watcher indicator
 //   showScreen(kind): void   // kind: 'title' | 'won' | 'dead' | null
 // }
 
@@ -65,6 +66,49 @@ const STYLE = `
 @keyframes hud-low-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+
+/* ---------- watcher indicator row (top-right, mirrors energy row) ---------- */
+.hud-watchers {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 70%;
+}
+
+.hud-watch-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #cfe8ff;
+  text-shadow: 0 0 4px rgba(120, 190, 255, 0.6), 0 0 3px rgba(0,0,0,0.8);
+  filter: drop-shadow(0 0 2px rgba(0,0,0,0.6));
+  line-height: 1;
+}
+
+.hud-watch-icon.sentinel {
+  width: 20px;
+  height: 20px;
+  font-size: 16px;
+}
+
+.hud-watch-icon.sentry {
+  width: 14px;
+  height: 14px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.hud-watchers-clear {
+  margin-right: 6px;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  color: #4a6a55;
+  text-shadow: 0 0 4px rgba(0,0,0,0.9);
 }
 
 /* ---------- transient bottom-center message ---------- */
@@ -218,6 +262,13 @@ const ICONS = {
   tree: '▲',    // filled triangle — tree
 };
 
+// Watcher glyphs (pale, unicode-styled — an "eye" for the Sentinel, a
+// smaller diamond-eye for each sentry).
+const WATCHER_ICONS = {
+  sentinel: '◉',
+  sentry: '◈',
+};
+
 const SCAN_STATE_TEXT = {
   0: 'UNSEEN',
   1: 'SEEN',
@@ -239,6 +290,10 @@ export function createHud(overlayEl) {
   energyRow.className = 'hud-energy';
   overlayEl.appendChild(energyRow);
 
+  const watchersRow = document.createElement('div');
+  watchersRow.className = 'hud-watchers';
+  overlayEl.appendChild(watchersRow);
+
   const messageEl = document.createElement('div');
   messageEl.className = 'hud-message';
   overlayEl.appendChild(messageEl);
@@ -259,6 +314,8 @@ export function createHud(overlayEl) {
 
   let messageTimer = null;
   let scanState = 0;
+  let lastSentinelAlive = null;
+  let lastSentryCount = null;
 
   function setEnergy(n) {
     energyRow.innerHTML = '';
@@ -296,6 +353,44 @@ export function createHud(overlayEl) {
     const span = document.createElement('span');
     span.className = `hud-icon ${kind}`;
     span.textContent = ICONS[kind];
+    return span;
+  }
+
+  function setWatchers(sentinelAlive, sentryCount) {
+    const alive = !!sentinelAlive;
+    const count = Math.max(0, Math.min(3, Math.floor(sentryCount) || 0));
+
+    // Cheap no-op when values unchanged.
+    if (alive === lastSentinelAlive && count === lastSentryCount) return;
+    lastSentinelAlive = alive;
+    lastSentryCount = count;
+
+    watchersRow.innerHTML = '';
+
+    if (!alive && count === 0) {
+      const clearEl = document.createElement('span');
+      clearEl.className = 'hud-watchers-clear';
+      clearEl.textContent = 'CLEAR';
+      watchersRow.appendChild(clearEl);
+      return;
+    }
+
+    const frag = document.createDocumentFragment();
+
+    if (alive) {
+      frag.appendChild(makeWatchIcon('sentinel'));
+    }
+    for (let i = 0; i < count; i++) {
+      frag.appendChild(makeWatchIcon('sentry'));
+    }
+
+    watchersRow.appendChild(frag);
+  }
+
+  function makeWatchIcon(kind) {
+    const span = document.createElement('span');
+    span.className = `hud-watch-icon ${kind}`;
+    span.textContent = WATCHER_ICONS[kind];
     return span;
   }
 
@@ -361,5 +456,5 @@ export function createHud(overlayEl) {
     screenEl.style.display = 'flex';
   }
 
-  return { setEnergy, showMessage, setScanState, setScanned, showScreen };
+  return { setEnergy, showMessage, setScanState, setScanned, setWatchers, showScreen };
 }

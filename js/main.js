@@ -8,6 +8,7 @@ import { render } from './renderer.js';
 import { screenRay } from './math3d.js';
 import { createInput } from './input.js';
 import { createHud } from './hud.js';
+import { createAudio } from './audio.js';
 
 const LOGIC_HZ = 10;
 const YAW_SPEED = 1.2;        // rad/s
@@ -37,6 +38,10 @@ const canvas = document.getElementById('screen');
 const ctx = canvas.getContext('2d');
 const input = createInput(canvas);
 const hud = createHud(document.getElementById('overlay'));
+const audio = createAudio();
+// Browsers only allow audio after a user gesture.
+window.addEventListener('keydown', () => audio.unlock(), { once: true });
+window.addEventListener('mousedown', () => audio.unlock(), { once: true });
 
 let state = 'title';          // 'title' | 'playing' | 'won' | 'dead'
 let world = null;
@@ -163,6 +168,7 @@ function newGame() {
   camera.pitch = 0;
   syncCamera();
   state = 'playing';
+  lastScanState = 0;
   hud.showScreen(null);
   hud.setEnergy(game.energy);
   hud.showMessage(`LANDSCAPE ${String(seed).padStart(4, '0')}`, 3000);
@@ -180,6 +186,7 @@ function syncCamera() {
 
 let last = performance.now();
 let logicAcc = 0;
+let lastScanState = 0;
 
 function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
@@ -233,8 +240,21 @@ function frame(now) {
 
     hud.setEnergy(game.energy);
     hud.setScanState(game.scanState ?? 0);
+    hud.setWatchers(
+      world.objects.some((o) => o.type === 'sentinel'),
+      world.objects.filter((o) => o.type === 'sentry').length,
+    );
     for (const msg of game.messages.splice(0)) {
       hud.showMessage(msg, 2500);
+    }
+    for (const ev of game.events.splice(0)) {
+      audio.play(ev);
+    }
+    // Scan-state rising edges get their own warning sounds.
+    if (game.scanState !== lastScanState) {
+      if (game.scanState === 1) audio.play('seen');
+      else if (game.scanState === 2) audio.play('draining');
+      lastScanState = game.scanState;
     }
     if (game.status === 'won') { state = 'won'; hud.showScreen('won'); }
     else if (game.status === 'dead') { state = 'dead'; hud.showScreen('dead'); }
