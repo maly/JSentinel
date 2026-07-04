@@ -71,13 +71,16 @@ const STYLE = `
 /* ---------- watcher indicator row (top-right, mirrors energy row) ---------- */
 .hud-watchers {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 8px;
+  right: 8px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: 5px;
   max-width: 70%;
+  padding: 3px 8px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(140, 200, 255, 0.35);
 }
 
 .hud-watch-icon {
@@ -91,16 +94,16 @@ const STYLE = `
 }
 
 .hud-watch-icon.sentinel {
-  width: 20px;
-  height: 20px;
-  font-size: 16px;
+  width: 22px;
+  height: 22px;
+  font-size: 19px;
 }
 
 .hud-watch-icon.sentry {
-  width: 14px;
-  height: 14px;
-  font-size: 11px;
-  opacity: 0.85;
+  width: 17px;
+  height: 17px;
+  font-size: 14px;
+  opacity: 0.9;
 }
 
 .hud-watchers-clear {

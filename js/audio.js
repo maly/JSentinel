@@ -117,6 +117,29 @@ function noiseSource(ctx, dest, dur, { filterType = 'lowpass', filterFreq = 2000
 
 // ---------- individual synth patches ----------
 
+// Soft "dissolve" buzz layered under absorb/create — runs for the whole
+// materialization (~1.2 s, matching the game's DISSOLVE_SECONDS) with a
+// square-wave tremolo for the original's crackly dissolve character.
+function buzzLayer(ctx, dest, { dur = 1.2, base = 70, peak = 0.25 } = {}) {
+  const t0 = now(ctx);
+
+  const { osc, gain } = tone(ctx, dest, { type: 'sawtooth', freq: base, dur });
+  envelope(gain, t0, { peak, attack: 0.05, dur });
+
+  const { gain: gain2 } = tone(ctx, dest, { type: 'square', freq: base * 1.02, dur });
+  envelope(gain2, t0, { peak: peak * 0.7, attack: 0.05, dur });
+
+  const lfo = ctx.createOscillator();
+  lfo.type = 'square';
+  lfo.frequency.value = 26;
+  const lfoGain = ctx.createGain();
+  lfoGain.gain.value = peak * 0.5;
+  lfo.connect(lfoGain);
+  lfoGain.connect(gain.gain);
+  lfo.start(t0);
+  lfo.stop(t0 + dur + 0.05);
+}
+
 function sfxAbsorb(ctx, dest) {
   const dur = 0.5;
   const t0 = now(ctx);
@@ -128,6 +151,8 @@ function sfxAbsorb(ctx, dest) {
   const { osc: osc2, gain: gain2 } = tone(ctx, dest, { type: 'square', freq: 450, dur });
   freqSweep(osc2, t0, 450, 90, dur);
   envelope(gain2, t0, { peak: 0.5, attack: 0.02, dur });
+
+  buzzLayer(ctx, dest, { base: 62 });
 }
 
 function sfxCreate(ctx, dest) {
@@ -141,6 +166,8 @@ function sfxCreate(ctx, dest) {
   const { osc: osc2, gain: gain2 } = tone(ctx, dest, { type: 'square', freq: 90, dur });
   freqSweep(osc2, t0, 90, 450, dur);
   envelope(gain2, t0, { peak: 0.5, attack: 0.02, dur });
+
+  buzzLayer(ctx, dest, { base: 78 });
 }
 
 function sfxTransfer(ctx, dest) {
