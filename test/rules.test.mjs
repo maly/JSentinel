@@ -148,12 +148,16 @@ function testMeanieTriggerWhenHeadVisibleBaseHidden() {
   const tree = world.addObject({ type: 'tree', x: 6, z: 1 });
   const game = new Game(world, { x: 6, z: 0, energy: 10 });
 
+  // Being spotted is not instant doom: the watcher needs ~5 s of sustained
+  // head-only sight before summoning a meanie.
   game.tick(0.1);
-
-  assert.equal(tree.type, 'meanie');
+  assert.equal(tree.type, 'tree');
   assert.equal(game.scannedBySentinel, true);
   // Head visible but base hidden => scan state 1 ("seen", cannot drain).
   assert.equal(game.scanState, 1);
+
+  tickSeconds(game, 5.1);
+  assert.equal(tree.type, 'meanie');
 
   // The meanie spawns facing away and sweeps slowly — the player gets a real
   // reaction window before the forced hyperspace...

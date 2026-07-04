@@ -7,6 +7,9 @@ const SENTINEL_DRAIN_SECONDS = 7;
 // it rotates in 30° steps, sweeping the landscape.
 const SENTINEL_HALF_FOV = Math.PI / 6;
 const MEANIE_COOLDOWN_SECONDS = 8;
+// A watcher must see the player's head (without the base) CONTINUOUSLY for
+// this long before it summons a meanie — spotting you is not instant doom.
+const MEANIE_SUMMON_SECONDS = 5;
 const DISSOLVE_SECONDS = 1.2;
 
 // What a drained object degrades into (energy conservation: the lost unit
@@ -325,10 +328,18 @@ export class Game {
         }
       }
 
+      // Meanie summoning takes sustained sight: the timer accumulates only
+      // while this watcher sees the head (and not the base), else it resets.
+      if (!baseVisible && headVisible) {
+        watcher._meanieT = (watcher._meanieT ?? 0) + dt;
+      } else {
+        watcher._meanieT = 0;
+      }
       const meanieExists = this.world.objects.some((object) => object.type === 'meanie');
-      if (!baseVisible && headVisible && !meanieExists && this._meanieCooldown === 0) {
+      if (watcher._meanieT >= MEANIE_SUMMON_SECONDS && !meanieExists && this._meanieCooldown === 0) {
         this._convertNearestTreeToMeanie();
         this._meanieCooldown = MEANIE_COOLDOWN_SECONDS;
+        watcher._meanieT = 0;
       }
     }
 
