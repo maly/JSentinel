@@ -110,9 +110,10 @@ window.addEventListener('mousedown', unlockAudio, { once: true });
 //   'splash' -> 'menu' -> 'playing'         (menu START GAME)
 //   'menu'   -> 'code' -> 'playing'         (menu ENTER CODE, valid code)
 //   'playing' -> 'won' | 'complete' | 'dead' (Enter restarts, Esc -> 'menu')
+//   'playing' -> 'confirm' -> 'playing'|'menu' (Backspace -> ABANDON LANDSCAPE? -> NO/YES)
 // A valid ?seed= deep-links 'splash' -> 'playing' directly.
 const seedLink = urlSeed();
-let state = 'splash';         // 'splash' | 'menu' | 'code' | 'playing' | 'won' | 'complete' | 'dead' | 'settings'
+let state = 'splash';         // 'splash' | 'menu' | 'code' | 'playing' | 'won' | 'complete' | 'dead' | 'settings' | 'confirm'
 let world = null;
 let game = null;
 let camera = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, targetYaw: 0, targetPitch: 0 };
@@ -137,6 +138,10 @@ let codeDigits = '';          // up to 8 typed digits
 // from ('menu' or 'playing') so the second Esc lands back there unchanged.
 let settingsSelection = 0;
 let settingsReturn = 'menu';
+
+// Backspace-in-gameplay "ABANDON LANDSCAPE?" modal. NO (0) is the default
+// selection; YES (1) quits to the menu. Only ever entered from 'playing'.
+let confirmSelection = 0;
 
 // ---- Level setup ----------------------------------------------------------
 // Terrain gives us bare tiles; the level itself (Sentinel on its pedestal on
@@ -530,6 +535,28 @@ function closeSettings() {
   }
 }
 
+// Open the "ABANDON LANDSCAPE?" modal from gameplay on Backspace. Same pause
+// mechanics as openSettings: the frame loop stops ticking while
+// state === 'confirm', leaving the last frame on screen; music keeps flowing.
+function openConfirm() {
+  confirmSelection = 0;   // NO is always the safe default on open
+  state = 'confirm';
+  audio.play('menuMove');
+  hud.showConfirm(confirmSelection);
+}
+
+// yes=false (NO) resumes the paused game untouched, like closeSettings().
+// yes=true (YES) quits to the menu via the standard fade.
+function resolveConfirm(yes) {
+  if (yes) {
+    fadeTo(() => goToMenu());
+  } else {
+    state = 'playing';
+    hud.showScreen(null);    // drop the overlay; the live HUD is underneath
+    last = performance.now(); // avoid a dt spike from the paused interval
+  }
+}
+
 function confirmCode() {
   const code = parseSeed(codeDigits);
   const lvl = code === null ? null : seedToLevel(code);
@@ -624,15 +651,47 @@ function onMenuKeyDown(e) {
     return;
   }
 
-  // In gameplay, Escape opens the settings overlay and pauses the simulation.
+  if (state === 'confirm') {
+    if (code === 'ArrowLeft' || code === 'ArrowUp' || code === 'KeyA' || code === 'KeyW') {
+      e.preventDefault();
+      if (confirmSelection !== 0) {
+        confirmSelection = 0;
+        audio.play('menuMove');
+        hud.setConfirmSelection(confirmSelection);
+      }
+    } else if (code === 'ArrowRight' || code === 'ArrowDown' || code === 'KeyD' || code === 'KeyS') {
+      e.preventDefault();
+      if (confirmSelection !== 1) {
+        confirmSelection = 1;
+        audio.play('menuMove');
+        hud.setConfirmSelection(confirmSelection);
+      }
+    } else if (isEnter) {
+      e.preventDefault();
+      audio.play('menuSelect');
+      resolveConfirm(confirmSelection === 1);
+    } else if (code === 'Escape' || code === 'Backspace') {
+      // Both read as "NO" — same quiet back-out feedback as menu/settings Esc.
+      e.preventDefault();
+      audio.play('menuMove');
+      resolveConfirm(false);
+    }
+    return;
+  }
+
+  // In gameplay, Escape opens the settings overlay and pauses the simulation;
+  // Backspace opens the ABANDON LANDSCAPE? confirm modal.
   if (state === 'playing') {
     if (code === 'Escape') { e.preventDefault(); openSettings('playing'); }
+    else if (code === 'Backspace') { e.preventDefault(); openConfirm(); }
     return;
   }
 
   // Bonus: Escape from an end screen returns to the menu (Enter still restarts).
+  // Backspace does the same directly — nothing is at stake there, so no
+  // confirm dialog is needed.
   if (state === 'won' || state === 'dead' || state === 'complete') {
-    if (code === 'Escape') { e.preventDefault(); fadeTo(() => goToMenu()); }
+    if (code === 'Escape' || code === 'Backspace') { e.preventDefault(); fadeTo(() => goToMenu()); }
   }
 }
 
@@ -680,6 +739,14 @@ overlayEl.addEventListener('click', (e) => {
   if (state === 'menu') {
     const opt = e.target.closest('.hud-menu-option');
     if (opt) { menuSelection = Number(opt.dataset.index); activateMenu(menuSelection); }
+  }
+  if (state === 'confirm') {
+    const opt = e.target.closest('.hud-menu-option');
+    if (opt) {
+      confirmSelection = Number(opt.dataset.index);
+      audio.play('menuSelect');
+      resolveConfirm(confirmSelection === 1);
+    }
   }
 });
 overlayEl.addEventListener('mousemove', (e) => {
@@ -794,10 +861,10 @@ function frame(now) {
   // Discrete actions. Splash/menu/code run their own keydown listener, so
   // here we just drain and ignore input.js's queue in those states.
   const actions = input.pollActions();
-  if (state === 'splash' || state === 'menu' || state === 'code' || state === 'settings') {
+  if (state === 'splash' || state === 'menu' || state === 'code' || state === 'settings' || state === 'confirm') {
     // dropped on purpose — these states run their own keydown listener, and
-    // 'settings' must never let a stray Enter reach newGame() (that would reset
-    // the paused game the player is about to return to).
+    // 'settings'/'confirm' must never let a stray Enter reach newGame() (that
+    // would reset the paused game the player is about to return to).
   } else
   for (const action of actions) {
     if (action === 'start') {

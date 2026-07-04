@@ -276,9 +276,21 @@ const STYLE = `
 .hud-screen.splash,
 .hud-screen.menu,
 .hud-screen.code,
-.hud-screen.settings {
+.hud-screen.settings,
+.hud-screen.confirm {
   pointer-events: auto;
   cursor: default;
+}
+
+/* ---------- quit-to-menu confirm modal (Backspace, mid-game) ---------- */
+.hud-screen.confirm {
+  background: rgba(2, 6, 3, 0.82);
+}
+
+.hud-menu.confirm-menu {
+  flex-direction: row;
+  gap: 32px;
+  margin: 6px 0 0;
 }
 
 .hud-screen-title.big {
@@ -508,6 +520,9 @@ const FOOTER_LINES = [
 ];
 
 const MENU_OPTIONS = ['START GAME', 'ENTER CODE', 'SETTINGS'];
+
+// Backspace-in-gameplay quit confirmation. NO is the default (safe) choice.
+const CONFIRM_OPTIONS = ['NO', 'YES'];
 
 // Settings rows, in ↑↓ selection order. `key` matches settings.js item keys.
 const SETTINGS_ITEMS = [
@@ -787,6 +802,31 @@ export function createHud(overlayEl) {
     screenEl.style.display = 'flex';
   }
 
+  // "ABANDON LANDSCAPE?" modal shown mid-game on Backspace. No footer (it's a
+  // transient overlay, not a full screen swap) — the paused game render sits
+  // underneath. Option elements carry data-index for the click handler, same
+  // convention as showMenu().
+  function showConfirm(selectedIndex = 0) {
+    screenEl.className = 'hud-screen confirm';
+    screenEl.innerHTML = '';
+    screenEl.appendChild(makeDiv('hud-screen-title', 'ABANDON LANDSCAPE?'));
+    const menu = makeDiv('hud-menu confirm-menu');
+    CONFIRM_OPTIONS.forEach((label, i) => {
+      const opt = makeDiv(`hud-menu-option${i === selectedIndex ? ' selected' : ''}`, label);
+      opt.dataset.index = String(i);
+      menu.appendChild(opt);
+    });
+    screenEl.appendChild(menu);
+    screenEl.style.display = 'flex';
+  }
+
+  // Move the confirm modal's highlight without rebuilding it.
+  function setConfirmSelection(index) {
+    screenEl.querySelectorAll('.hud-menu-option').forEach((el, i) => {
+      el.classList.toggle('selected', i === index);
+    });
+  }
+
   // display: the code text already formatted as XXXX-XXXX (with placeholders
   // for not-yet-typed digits). error: optional message under the code.
   function showCode(display, error = '') {
@@ -888,6 +928,7 @@ export function createHud(overlayEl) {
     setEnergy, showMessage, setScanState, setScanned, setWatchers, flash,
     showScreen, showSplash, showMenu, showCode,
     showSettings, setSettingValue, setSettingSelection,
+    showConfirm, setConfirmSelection,
     fadeOut, fadeIn, showIntroTitle,
     menuOptionCount: MENU_OPTIONS.length,
   };
