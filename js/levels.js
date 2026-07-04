@@ -52,6 +52,16 @@ export function formatLevel(level) {
   return String(level).padStart(4, '0');
 }
 
+// Displayed as XXXX-XXXX — easier to memorize and dictate.
 export function formatSeed(code) {
-  return String(code).padStart(8, '0');
+  const s = String(code).padStart(8, '0');
+  return `${s.slice(0, 4)}-${s.slice(4)}`;
+}
+
+// Parses user-supplied code text: accepts "98302101" and "9830-2101".
+export function parseSeed(text) {
+  if (typeof text !== 'string') return null;
+  const digits = text.replace(/[\s-]/g, '');
+  if (!/^\d{1,8}$/.test(digits)) return null;
+  return Number.parseInt(digits, 10);
 }

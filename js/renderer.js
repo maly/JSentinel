@@ -46,6 +46,10 @@ const GREEN_B = [0x3D, 0x8B, 0x3D];   // checkerboard dark green
 //     gold robot; the per-polygon dark outline keeps the robot legible on it.
 //     PALETTES[0] (Verdant) is green-on-green with the tree by design (that is
 //     the original game's look and is left unchanged).
+// Darken an [r,g,b] by a factor (alternate palettes read better subdued).
+const dk = (rgb, f) => [Math.round(rgb[0] * f), Math.round(rgb[1] * f), Math.round(rgb[2] * f)];
+const DARK = 0.8;
+
 export const PALETTES = [
   { name: 'Verdant',   skyTop: SKY_TOP,        skyHorizon: SKY_HORIZON,   tileA: GREEN_A,          tileB: GREEN_B },
   { name: 'Steel',     skyTop: [178, 102, 34], skyHorizon: [236, 182, 96], tileA: [92, 122, 168],  tileB: [58, 86, 130] },
@@ -55,7 +59,14 @@ export const PALETTES = [
   { name: 'Crimson',   skyTop: [202, 180, 176], skyHorizon: [240, 226, 216], tileA: [202, 56, 56], tileB: [148, 32, 40] },
   { name: 'Ice',       skyTop: [12, 20, 60],   skyHorizon: [42, 72, 132],  tileA: [184, 206, 236], tileB: [116, 150, 210] },
   { name: 'Sunset',    skyTop: [190, 88, 38],  skyHorizon: [242, 172, 92], tileA: [142, 136, 60],  tileB: [100, 94, 42] },
-];
+].map((p, i) => (i === 0 ? p : {
+  // Alternates toned down ~20%; the classic Verdant look stays untouched.
+  name: p.name,
+  skyTop: dk(p.skyTop, DARK),
+  skyHorizon: dk(p.skyHorizon, DARK),
+  tileA: dk(p.tileA, DARK),
+  tileB: dk(p.tileB, DARK),
+}));
 
 // Active palette index. Default 0 => existing callers see the unchanged look.
 let activePaletteIndex = 0;

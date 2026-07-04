@@ -9,7 +9,7 @@ import { screenRay } from './math3d.js';
 import { createInput } from './input.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
-import { levelToSeed, seedToLevel, formatLevel, formatSeed } from './levels.js';
+import { levelToSeed, seedToLevel, formatLevel, formatSeed, parseSeed } from './levels.js';
 
 const LOGIC_HZ = 10;
 const YAW_SPEED = 1.2;        // rad/s
@@ -48,9 +48,9 @@ function mulberry32(seed) {
 // level (0000-9999); anything else starts at level 0000.
 function levelFromUrl() {
   const raw = new URLSearchParams(location.search).get('seed');
-  if (!raw || !/^\d{1,8}$/.test(raw)) return 0;
-  const mapped = seedToLevel(Number.parseInt(raw, 10));
-  return mapped ?? 0;
+  const code = parseSeed(raw ?? '');
+  if (code === null) return 0;
+  return seedToLevel(code) ?? 0;
 }
 
 const canvas = document.getElementById('screen');

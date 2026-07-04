@@ -59,5 +59,7 @@ class DevHandler(SimpleHTTPRequestHandler):
 
 if __name__ == '__main__':
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8123
-    print(f'Serving on http://localhost:{port}')
-    HTTPServer(('127.0.0.1', port), DevHandler).serve_forever()
+    print(f'Serving on http://0.0.0.0:{port}')
+    # Bind all interfaces — the game may be opened via the machine's LAN IP
+    # or hostname, not just localhost.
+    HTTPServer(('0.0.0.0', port), DevHandler).serve_forever()
