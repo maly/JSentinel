@@ -31,6 +31,8 @@ function angleDiff(from, to) {
 }
 const BOULDER_COUNT = 2;
 const START_ENERGY = 10;
+// A watcher's turn "krrk" fades to silence over this many tiles (linear).
+const WATCHER_TURN_RANGE = 15;
 
 // Difficulty rises in steps of 200 levels and maxes out at level 2000:
 // tier 0 = levels 0000-0199 (today's balance), tier 10 = harshest.
@@ -301,6 +303,7 @@ function leaveSplash() {
 }
 
 function activateMenu(i) {
+  audio.play('menuSelect');                      // confirm — keyboard Enter or mouse click
   if (i === 0) { level = 0; newGame(); }        // START GAME — classic level 0000
   else if (i === 1) { goToCode(); }             // ENTER CODE
   else { openSettings('menu'); }                // SETTINGS
@@ -334,6 +337,7 @@ function confirmCode() {
   const code = parseSeed(codeDigits);
   const lvl = code === null ? null : seedToLevel(code);
   if (codeDigits.length !== 8 || lvl === null) {
+    audio.play('uiError');
     hud.showCode(codeDisplay(codeDigits), 'INVALID CODE');
     return;
   }
@@ -355,10 +359,12 @@ function onMenuKeyDown(e) {
     if (code === 'ArrowUp' || code === 'KeyW') {
       e.preventDefault();
       menuSelection = (menuSelection + MENU_COUNT - 1) % MENU_COUNT;
+      audio.play('menuMove');
       hud.showMenu(menuSelection);
     } else if (code === 'ArrowDown' || code === 'KeyS') {
       e.preventDefault();
       menuSelection = (menuSelection + 1) % MENU_COUNT;
+      audio.play('menuMove');
       hud.showMenu(menuSelection);
     } else if (isEnter) {
       e.preventDefault();
@@ -368,18 +374,20 @@ function onMenuKeyDown(e) {
   }
 
   if (state === 'code') {
-    if (code === 'Escape') { e.preventDefault(); goToMenu(); }
+    if (code === 'Escape') { e.preventDefault(); audio.play('menuMove'); goToMenu(); }
     else if (isEnter) { e.preventDefault(); confirmCode(); }
     else if (code === 'Backspace') {
       e.preventDefault();
       if (codeDigits.length) {
         codeDigits = codeDigits.slice(0, -1);
+        audio.play('keyBlip');
         hud.showCode(codeDisplay(codeDigits), '');
       }
     } else if (/^(Digit|Numpad)\d$/.test(code)) {
       e.preventDefault();
       if (codeDigits.length < 8) {
         codeDigits += code.slice(-1);
+        audio.play('keyBlip');
         hud.showCode(codeDisplay(codeDigits), '');
       }
     }
@@ -391,21 +399,26 @@ function onMenuKeyDown(e) {
     if (code === 'ArrowUp' || code === 'KeyW') {
       e.preventDefault();
       settingsSelection = (settingsSelection + settings.items.length - 1) % settings.items.length;
+      audio.play('menuMove');
       hud.setSettingSelection(settingsSelection);
     } else if (code === 'ArrowDown' || code === 'KeyS') {
       e.preventDefault();
       settingsSelection = (settingsSelection + 1) % settings.items.length;
+      audio.play('menuMove');
       hud.setSettingSelection(settingsSelection);
     } else if (code === 'ArrowLeft' || code === 'KeyA') {
       e.preventDefault();
       const v = settings.nudge(item.key, -settings.step);
+      audio.play('keyBlip');   // value adjust — same feedback as a slider drag
       hud.setSettingValue(settingsSelection, v);
     } else if (code === 'ArrowRight' || code === 'KeyD') {
       e.preventDefault();
       const v = settings.nudge(item.key, settings.step);
+      audio.play('keyBlip');
       hud.setSettingValue(settingsSelection, v);
     } else if (code === 'Escape') {
       e.preventDefault();
+      audio.play('menuMove');
       closeSettings();
     }
     return;
@@ -473,12 +486,20 @@ overlayEl.addEventListener('mousemove', (e) => {
   const opt = e.target.closest('.hud-menu-option');
   if (opt) {
     const i = Number(opt.dataset.index);
-    if (i !== menuSelection) { menuSelection = i; hud.showMenu(menuSelection); }
+    if (i !== menuSelection) { menuSelection = i; audio.play('menuMove'); hud.showMenu(menuSelection); }
   }
 });
 
 // ---- Settings slider mouse control (click + drag) ----------------------
 let settingsDrag = null;      // { index, key, track } while dragging a slider
+
+// Slider drag emits keyBlip, but throttled to at most one every 50 ms so a fast
+// drag doesn't machine-gun the synth.
+let lastDragBlip = 0;
+function dragBlip() {
+  const t = performance.now();
+  if (t - lastDragBlip >= 50) { lastDragBlip = t; audio.play('keyBlip'); }
+}
 
 function pctFromTrack(track, clientX) {
   const rect = track.getBoundingClientRect();
@@ -500,6 +521,7 @@ overlayEl.addEventListener('mousedown', (e) => {
     const key = track.dataset.key;
     settingsDrag = { index, key, track };
     const v = settings.setValue(key, pctFromTrack(track, e.clientX));
+    dragBlip();
     hud.setSettingValue(index, v);
   }
 });
@@ -507,6 +529,7 @@ overlayEl.addEventListener('mousedown', (e) => {
 window.addEventListener('mousemove', (e) => {
   if (!settingsDrag) return;
   const v = settings.setValue(settingsDrag.key, pctFromTrack(settingsDrag.track, e.clientX));
+  dragBlip();
   hud.setSettingValue(settingsDrag.index, v);
 });
 
@@ -526,6 +549,11 @@ function frame(now) {
   // hide it (CSS reacts to this body class). Idempotent — no reflow when steady.
   const inGame = state === 'playing' || state === 'won' || state === 'dead' || state === 'complete';
   document.body.classList.toggle('show-footer', inGame);
+
+  // Ambient wind runs only in the game states (silent in menu/splash/settings);
+  // its intensity tracks the scan pressure while actually playing. setAmbient is
+  // idempotent per (active,scan), so calling it every frame is free.
+  audio.setAmbient(inGame, state === 'playing' && game ? (game.scanState ?? 0) : 0);
 
   // View rotation every frame for smoothness.
   if (state === 'playing') {
@@ -626,11 +654,23 @@ function frame(now) {
       hud.showMessage(msg, 2500);
     }
     for (const ev of game.events.splice(0)) {
-      audio.play(ev);
+      // Events are bare strings, or { type, ... } objects carrying a payload.
+      const type = typeof ev === 'string' ? ev : ev.type;
+      if (type === 'watcherTurn') {
+        // Distance-attenuated so the player HEARS the landscape move: linear
+        // falloff, audible out to WATCHER_TURN_RANGE tiles.
+        const dx = ev.x - game.camera.x;
+        const dz = ev.z - game.camera.z;
+        const dist = Math.hypot(dx, dz);
+        const gain = Math.max(0, 1 - dist / WATCHER_TURN_RANGE);
+        if (gain > 0) audio.play('watcherTurn', { gain });
+        continue;
+      }
+      audio.play(type);
       // Visual feedback for teleport / drain events.
-      if (ev === 'hyperspace') hud.flash('hyperspace');
-      else if (ev === 'transfer') hud.flash('transfer');
-      else if (ev === 'drain') shake = Math.max(shake, 0.6);
+      if (type === 'hyperspace') hud.flash('hyperspace');
+      else if (type === 'transfer') hud.flash('transfer');
+      else if (type === 'drain') shake = Math.max(shake, 0.6);
     }
     // Scan-state rising edges get their own warning sounds.
     if (game.scanState !== lastScanState) {
@@ -713,3 +753,5 @@ window.__dbg = {
 };
 // Music debug hook: current track, planned successor, mode, format, ctx state.
 window.__music = music;
+// Audio debug hook: unlock state, ctx state, ambient bed status (see audio.debug).
+window.__audio = audio;

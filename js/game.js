@@ -398,6 +398,10 @@ export class Game {
       if (watcher._rotT >= SENTINEL_ROTATE_SECONDS) {
         watcher._rotT = 0;
         watcher.facing = ((watcher.facing ?? 0) + Math.PI / 6) % (Math.PI * 2);
+        // A watcher stepping its facing is audible: emit its tile so the
+        // presentation layer can play a distance-attenuated "krrk". Purely a
+        // sound cue — no mechanics change.
+        this._event('watcherTurn', { x: watcher.x, z: watcher.z });
         // After turning, scan the fresh view and feed: robots before boulders.
         this._scanAndDrainObjects(watcher);
       }
@@ -644,8 +648,12 @@ export class Game {
     this.messages.push(message);
   }
 
-  _event(type) {
-    this.events.push(type);
+  // Sound/FX events. With no payload an event is pushed as a bare string
+  // (backward-compatible with the existing string consumers); with a payload it
+  // becomes { type, ...payload } so the presentation layer can, e.g., attenuate
+  // by position. Consumers normalize with `typeof ev === 'string' ? ev : ev.type`.
+  _event(type, payload) {
+    this.events.push(payload ? { type, ...payload } : type);
   }
 }
 

@@ -11,8 +11,20 @@
 //   isMuted(): bool,
 // }
 //
-// Bus graph:  destination <- limiter <- master <- sfxBus  (SFX play() routes here)
-//                                              <- musicBus (music.js routes here)
+// Bus graph:
+//   destination <- limiter <- master <- sfxBus   (game SFX play() routes here)
+//                                     <- uiBus    (UI micro-sounds — DRY, no reverb)
+//                                     <- ambientBus (wind bed — DRY, no reverb)
+//                                     <- musicBus (music.js routes here)
+//                                     <- wetGain <- convolver <- sfxBus  (reverb send)
+//
+// Reverb: a procedurally-generated 2 s stereo impulse (exp-decaying noise, no
+// asset) is fed a parallel send from sfxBus only, so GAME sfx sound "in the
+// landscape" while UI micro-sounds stay dry and immediate. Ambient wind runs on
+// its own bus straight to master (see setAmbient) — dry, and independent of the
+// Effects slider (which only touches sfxBus): turning SFX down must not kill the
+// atmosphere, and feeding a constant noise loop through the convolver would just
+// waste CPU and wash the bed out.
 //
 // The three Settings sliders drive the three gain nodes. 100% on each slider
 // reproduces the pre-Settings balance exactly (relative SFX vs. music mix is
@@ -33,8 +45,19 @@ export function createAudio() {
   let ctx = null;
   let master = null;
   let sfxBus = null;
+  let uiBus = null;         // dry bus for UI micro-sounds (no reverb send)
   let musicSub = null;
   let limiter = null;
+
+  // Ambient wind graph (built lazily the first time it is switched on).
+  let ambientBus = null;
+  let ambientNoise = null;
+  let ambientFilter = null;
+  let ambientGain = null;
+  let ambientLFO = null;
+  let ambientLFOGain = null;
+  let ambientBuilt = false;
+  let ambientState = { active: false, scan: 0 };
 
   // Desired slider values (0..100). Applied live once the nodes exist; stored
   // beforehand so Settings can be changed before the first user gesture.
@@ -74,8 +97,21 @@ export function createAudio() {
         master.connect(limiter);
         sfxBus = ctx.createGain();
         sfxBus.connect(master);
+        uiBus = ctx.createGain();      // dry — under master + mute, but NOT the Effects slider
+        uiBus.connect(master);
         musicSub = ctx.createGain();
         musicSub.connect(master);
+
+        // Reverb send: sfxBus -> convolver -> wetGain -> master (parallel to the
+        // dry sfxBus -> master path). Only game SFX are sent; UI/ambient are dry.
+        const convolver = ctx.createConvolver();
+        convolver.buffer = makeReverbIR(ctx, 2.0);
+        const wetGain = ctx.createGain();
+        wetGain.gain.value = 0.15;
+        sfxBus.connect(convolver);
+        convolver.connect(wetGain);
+        wetGain.connect(master);
+
         applyVolumes();
       }
       if (ctx.state === 'suspended') {
@@ -86,15 +122,116 @@ export function createAudio() {
     }
   }
 
-  function play(name) {
+  // play(name, opts?) — opts.gain (0..1) scales this one call via a throwaway
+  // gain node (used for the distance-attenuated watcherTurn). UI micro-sounds
+  // route to the dry uiBus; everything else to sfxBus (which carries the reverb
+  // send) so game SFX sound "in the landscape".
+  function play(name, opts) {
     if (!ctx || !sfxBus) return; // play() before unlock() is a silent no-op
     const fn = SOUNDS[name];
     if (!fn) return;
+    const bus = UI_SOUNDS.has(name) ? uiBus : sfxBus;
+    if (!bus) return;
+    let dest = bus;
+    const g = opts && opts.gain;
+    if (g != null) {
+      if (g <= 0) return;             // fully attenuated — skip entirely
+      if (g !== 1) {
+        const gn = ctx.createGain();
+        gn.gain.value = g;
+        gn.connect(bus);              // GC'd once the patch's sources end
+        dest = gn;
+      }
+    }
     try {
-      fn(ctx, sfxBus);
+      fn(ctx, dest);
     } catch (e) {
       // Swallow — a bad synth call should never crash the game.
     }
+  }
+
+  // ---- Ambient wind -------------------------------------------------------
+  // A continuous filtered-noise bed. Built once, then only its gain/cutoff/LFO
+  // targets are ramped (setTargetAtTime — no clicks). Runs on ambientBus ->
+  // master (dry). Mute is honoured via master. See the header for the routing
+  // rationale.
+  function buildAmbient() {
+    if (ambientBuilt || !ctx || !master) return;
+    ambientBus = ctx.createGain();
+    ambientBus.gain.value = 1;
+    ambientBus.connect(master);
+
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuffer(ctx, 4);   // 4 s loop — long enough to hide the seam
+    src.loop = true;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 400;
+    filter.Q.value = 0.7;
+
+    const gain = ctx.createGain();
+    gain.gain.value = 0.0001;           // silent until setAmbient ramps it up
+
+    // Slow LFO on the cutoff => the bed "breathes" in gusts.
+    const lfo = ctx.createOscillator();
+    lfo.type = 'sine';
+    lfo.frequency.value = 0.08;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 120;           // ± Hz swept around the base cutoff
+    lfo.connect(lfoGain);
+    lfoGain.connect(filter.frequency);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ambientBus);
+
+    src.start();
+    lfo.start();
+
+    ambientNoise = src;
+    ambientFilter = filter;
+    ambientGain = gain;
+    ambientLFO = lfo;
+    ambientLFOGain = lfoGain;
+    ambientBuilt = true;
+  }
+
+  // setAmbient(active, scanState) — active only in the game states; scanState
+  // 0 calm / 1 seen (a touch louder & brighter) / 2 draining (tense: louder,
+  // brighter, faster gusts). Idempotent per (active,scan) so main.js can call
+  // it every frame for free.
+  function setAmbient(active, scan = 0) {
+    if (!ctx) return;
+    active = !!active;
+    scan = active ? (scan | 0) : 0;
+    if (ambientState.active === active && ambientState.scan === scan) return;
+    ambientState = { active, scan };
+    buildAmbient();
+    if (!ambientGain) return;
+    const t = ctx.currentTime;
+    let g, cutoff, lfoRate, lfoDepth;
+    if (!active)        { g = 0.0;  cutoff = 300; lfoRate = 0.06; lfoDepth = 80;  }
+    else if (scan >= 2) { g = 0.11; cutoff = 900; lfoRate = 0.18; lfoDepth = 260; }
+    else if (scan === 1){ g = 0.075; cutoff = 600; lfoRate = 0.12; lfoDepth = 180; }
+    else                { g = 0.05; cutoff = 400; lfoRate = 0.08; lfoDepth = 120; }
+    ambientGain.gain.setTargetAtTime(g, t, 0.8);
+    ambientFilter.frequency.setTargetAtTime(cutoff, t, 0.8);
+    ambientLFO.frequency.setTargetAtTime(lfoRate, t, 1.5);
+    ambientLFOGain.gain.setTargetAtTime(lfoDepth, t, 1.5);
+  }
+
+  // Cheap debug snapshot for automated verification.
+  function debug() {
+    return {
+      unlocked: !!ctx,
+      ctxState: ctx ? ctx.state : 'none',
+      muted,
+      ambientBuilt,
+      ambientActive: ambientState.active,
+      ambientScan: ambientState.scan,
+      ambientGain: ambientGain ? ambientGain.gain.value : 0,
+    };
   }
 
   // Update the Settings volumes (partial objects allowed). Applied instantly to
@@ -124,7 +261,7 @@ export function createAudio() {
   function context() { return ctx; }
   function musicBus() { return musicSub; }
 
-  return { unlock, play, context, musicBus, setVolumes, setMuted, toggleMuted, isMuted };
+  return { unlock, play, setAmbient, debug, context, musicBus, setVolumes, setMuted, toggleMuted, isMuted };
 }
 
 // ---------- low-level helpers ----------
@@ -200,6 +337,23 @@ function noiseBuffer(ctx, dur) {
     data[i] = Math.random() * 2 - 1;
   }
   return buffer;
+}
+
+// Procedural reverb impulse: `seconds` of stereo noise whose amplitude decays
+// as (1 - t)^3 — a smooth exponential-ish tail. No asset, decorrelated L/R for
+// a bit of stereo width.
+function makeReverbIR(ctx, seconds) {
+  const rate = ctx.sampleRate;
+  const len = Math.max(1, Math.floor(rate * seconds));
+  const buf = ctx.createBuffer(2, len, rate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = buf.getChannelData(ch);
+    for (let i = 0; i < len; i++) {
+      const decay = (1 - i / len) ** 3;
+      data[i] = (Math.random() * 2 - 1) * decay;
+    }
+  }
+  return buf;
 }
 
 function noiseSource(ctx, dest, dur, { filterType = 'lowpass', filterFreq = 2000 } = {}) {
@@ -379,6 +533,62 @@ function sfxDead(ctx, dest) {
   envelope(gain2, t0, { peak: 0.5, attack: 0.02, dur });
 }
 
+// ---------- UI micro-sounds (dry — routed to uiBus, no reverb) ----------
+
+// A tiny navigation blip: ~1200 Hz triangle, ~30 ms, very quiet.
+function sfxMenuMove(ctx, dest) {
+  const dur = 0.03;
+  const t0 = now(ctx);
+  const { gain } = tone(ctx, dest, { type: 'triangle', freq: 1200, dur });
+  envelope(gain, t0, { peak: 0.09, attack: 0.003, dur });
+}
+
+// Two-tone confirmation (low -> high), triangle, short and crisp.
+function sfxMenuSelect(ctx, dest) {
+  const t0 = now(ctx);
+  const { gain: g1 } = tone(ctx, dest, { type: 'triangle', freq: 880, dur: 0.06 });
+  envelope(g1, t0, { peak: 0.11, attack: 0.003, dur: 0.06 });
+  const { gain: g2 } = tone(ctx, dest, { type: 'triangle', freq: 1320, start: 0.05, dur: 0.09 });
+  envelope(g2, t0 + 0.05, { peak: 0.12, attack: 0.003, dur: 0.09 });
+}
+
+// Key press for digit entry / backspace — shorter and lower than menuMove.
+function sfxKeyBlip(ctx, dest) {
+  const dur = 0.022;
+  const t0 = now(ctx);
+  const { gain } = tone(ctx, dest, { type: 'triangle', freq: 700, dur });
+  envelope(gain, t0, { peak: 0.07, attack: 0.002, dur });
+}
+
+// Rejection buzz for INVALID CODE — short, low, mildly harsh.
+function sfxUiError(ctx, dest) {
+  const dur = 0.18;
+  const t0 = now(ctx);
+  const { osc, gain } = tone(ctx, dest, { type: 'sawtooth', freq: 150, dur });
+  freqSweep(osc, t0, 150, 90, dur);
+  envelope(gain, t0, { peak: 0.16, attack: 0.004, dur });
+}
+
+// ---------- watcher turn (game — reverb-sent, distance-scaled by caller) ----
+
+// A quiet mechanical "krrk" as a watcher steps its facing: a short band-passed
+// noise scrape over a low thunk. Absolute level is kept low; main.js scales it
+// per-call by distance to the player.
+function sfxWatcherTurn(ctx, dest) {
+  const dur = 0.09;
+  const t0 = now(ctx);
+
+  const { src, gain } = noiseSource(ctx, dest, dur, { filterType: 'bandpass', filterFreq: 480 });
+  gain.gain.setValueAtTime(0.0001, t0);
+  gain.gain.exponentialRampToValueAtTime(0.5, t0 + 0.006);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.start(t0);
+  src.stop(t0 + dur + 0.05);
+
+  const { gain: g2 } = tone(ctx, dest, { type: 'square', freq: 95, dur: 0.07 });
+  envelope(g2, t0, { peak: 0.35, attack: 0.004, dur: 0.07 });
+}
+
 const SOUNDS = {
   absorb: sfxAbsorb,
   create: sfxCreate,
@@ -391,4 +601,12 @@ const SOUNDS = {
   uturn: sfxUturn,
   won: sfxWon,
   dead: sfxDead,
+  watcherTurn: sfxWatcherTurn,
+  menuMove: sfxMenuMove,
+  menuSelect: sfxMenuSelect,
+  keyBlip: sfxKeyBlip,
+  uiError: sfxUiError,
 };
+
+// Names that route to the dry uiBus instead of the reverb-sent sfxBus.
+const UI_SOUNDS = new Set(['menuMove', 'menuSelect', 'keyBlip', 'uiError']);
