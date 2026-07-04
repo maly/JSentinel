@@ -21,6 +21,9 @@ const DRAIN_CHAIN = Object.freeze({ robot: 'boulder', boulder: 'tree' });
 // the player's head — facing alone is not enough.
 const MEANIE_TURN_RATE = Math.PI / 3;
 const MEANIE_FACE_TOLERANCE = Math.PI / 12;
+// A meanie only hunts nearby: escape beyond this range (e.g. a transfer to
+// the far side of the map) and it loses its target and reverts to a tree.
+const MEANIE_RANGE = 10;
 
 const EYE_HEIGHT = Object.freeze({
   tree: 1.15,
@@ -371,6 +374,14 @@ export class Game {
     const playerPoint = this._playerHeadPoint();
     for (const meanie of [...this.world.objects.filter((object) => object.type === 'meanie')]) {
       const meaniePoint = centerOf(meanie);
+      if (distanceSq(meaniePoint, playerPoint) > MEANIE_RANGE * MEANIE_RANGE) {
+        // Player escaped its hunting range — the threat resolves.
+        meanie.type = 'tree';
+        meanie.energy = ENERGY.tree;
+        meanie.height = undefined;
+        meanie.radius = undefined;
+        continue;
+      }
       const desired = angleTo(meaniePoint, playerPoint);
       const current = meanie.facing ?? 0;
       const delta = shortestAngleDelta(current, desired);

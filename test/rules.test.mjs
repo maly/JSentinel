@@ -208,6 +208,18 @@ function testSentryAbsorbYieldsFour() {
   assert.equal(ENERGY.sentry, 4);
 }
 
+function testMeanieLosesDistantTarget() {
+  const world = new World(makeTiles(31, 31));
+  // Player far beyond the meanie's hunting range (>10 tiles away).
+  const game = new Game(world, { x: 0, z: 0, energy: 10 });
+  const meanie = world.addObject({ type: 'meanie', x: 25, z: 25, facing: 0 });
+
+  const energyBefore = game.energy;
+  tickSeconds(game, 1);
+  assert.equal(meanie.type, 'tree');        // reverted, no hunt
+  assert.equal(game.energy, energyBefore);  // no forced hyperspace
+}
+
 function testHyperspaceRevertsMeanie() {
   const world = new World(makeTiles());
   const game = new Game(world, { x: 0, z: 0, energy: 10 });
@@ -297,6 +309,7 @@ testMeanieTriggerWhenHeadVisibleBaseHidden();
 testAbsorbTargetsSquareTopObject();
 testSentryActsAsWatcher();
 testSentryAbsorbYieldsFour();
+testMeanieLosesDistantTarget();
 testHyperspaceRevertsMeanie();
 testTransferOnlyIntoRobots();
 testNoAbsorbAfterSentinel();
