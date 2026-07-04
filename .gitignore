@@ -3,3 +3,4 @@
 *.png
 CLAUDE.md
 wav/
+node_modules/

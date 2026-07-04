@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>THE SENTINEL</title>
+<style>
+  :root {
+    --scale: 1.75;
+    --game-w: 512px;
+    --game-h: 384px;
+    /* Max on-screen width (design size at --scale). */
+    --game-max-w: calc(var(--game-w) * var(--scale));
+    /* Vertical room reserved for the footer legend + margins, so the stage
+       always shrinks enough to keep the footer on screen on short viewports. */
+    --chrome-reserve: 110px;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: "Courier New", Courier, monospace;
+    color: #9fffb0;
+    user-select: none;
+  }
+
+  #stage {
+    position: relative;
+    /* Proportional 4:3 sizing. Width is the smallest of: the design size, the
+       viewport width, and the width implied by the available height once the
+       footer is accounted for. aspect-ratio derives the height, so the play
+       area (canvas + #overlay HUD, both 100% of #stage) always stays 4:3 and
+       fully visible — pure CSS, no JS resize handler. */
+    width: min(
+      var(--game-max-w),
+      96vw,
+      calc((100vh - var(--chrome-reserve)) * 4 / 3)
+    );
+    aspect-ratio: 4 / 3;
+    height: auto;
+    box-shadow: 0 0 0 2px #274a2c, 0 0 40px rgba(80, 255, 120, 0.15);
+    background: #000;
+  }
+
+  #screen {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
+    background: #000;
+  }
+
+  /* subtle scanline + vignette + grille overlay for retro CRT feel.
+     Layered top-to-bottom: radial vignette (edges darken ~0.25 after the 0.5
+     layer opacity), a faint 1px vertical grille, then the horizontal scanlines.
+     A very gentle stepped opacity flicker (max ~3% relative) adds CRT life while
+     staying well under photosensitivity thresholds. */
+  #stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse at 50% 50%,
+        rgba(0, 0, 0, 0) 60%,
+        rgba(0, 0, 0, 0.5) 100%),
+      repeating-linear-gradient(
+        to right,
+        rgba(0, 0, 0, 0.03) 0px,
+        rgba(0, 0, 0, 0.03) 1px,
+        rgba(0, 0, 0, 0) 1px,
+        rgba(0, 0, 0, 0) 3px
+      ),
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0, 0, 0, 0) 0px,
+        rgba(0, 0, 0, 0) 2px,
+        rgba(0, 0, 0, 0.08) 3px
+      );
+    mix-blend-mode: multiply;
+    opacity: 0.5;
+    animation: crt-flicker 3.2s steps(8, end) infinite;
+  }
+
+  @keyframes crt-flicker {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 0.515; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #stage::after { animation: none; }
+  }
+
+  #overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    font-family: "Courier New", Courier, monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* The key-legend footer is shown only during gameplay screens; main.js adds
+     the .show-footer class to <body> for playing/won/dead/complete states. */
+  footer {
+    display: none;
+    margin-top: 18px;
+    max-width: var(--game-max-w);
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.7;
+    color: #4f8a5a;
+    letter-spacing: 0.04em;
+  }
+
+  body.show-footer footer {
+    display: block;
+  }
+
+  footer .key {
+    display: inline-block;
+    padding: 1px 6px;
+    margin: 0 2px;
+    border: 1px solid #3a6a42;
+    border-radius: 3px;
+    color: #bdf5c4;
+    background: #0c1a0e;
+  }
+
+  footer .sep {
+    color: #24401f;
+    margin: 0 10px;
+  }
+
+  h1.title-mark {
+    display: none;
+  }
+</style>
+  <script type="module" crossorigin src="./assets/index-DDa1PkT5.js"></script>
+</head>
+<body>
+
+  <div id="stage">
+    <canvas id="screen" width="512" height="384"></canvas>
+    <div id="overlay"></div>
+  </div>
+
+  <footer>
+    <span class="key">WASD</span><span class="key">&uarr;&darr;&larr;&rarr;</span> LOOK
+    <span class="key">MOUSE</span> AIM
+    <span class="sep">|</span>
+    <span class="key">SHIFT</span> FAST
+    <span class="sep">|</span>
+    <span class="key">SPACE</span><span class="key">LMB</span> ABSORB
+    <span class="key">T</span> TREE
+    <span class="key">B</span> BOULDER
+    <span class="key">R</span> ROBOT
+    <br>
+    <span class="key">Q</span> TRANSFER
+    <span class="key">H</span> HYPERSPACE
+    <span class="key">E</span> U-TURN
+    <span class="key">M</span> MUTE
+    <span class="sep">|</span>
+    <span class="key">ENTER</span> START / RESTART
+  </footer>
+
+</body>
+</html>
