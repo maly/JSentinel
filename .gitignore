@@ -4,3 +4,4 @@
 CLAUDE.md
 wav/
 node_modules/
+__pycache__/
