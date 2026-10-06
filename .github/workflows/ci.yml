@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # setup-python poskytuje i příkaz `python`, který používá `npm run test:serve`
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check python command
+        run: python --version
+
+      - run: npm ci
+
+      - name: Tests (Node + Python)
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Check docs/ is up to date with build
+        run: |
+          git diff --exit-code --stat -- docs
+          untracked="$(git ls-files --others --exclude-standard -- docs)"
+          if [ -n "$untracked" ]; then
+            echo "$untracked"
+            echo "::error::docs/ obsahuje nové soubory z buildu – spusť 'npm run build' a commitni docs/."
+            exit 1
+          fi
