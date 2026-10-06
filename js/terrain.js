@@ -29,15 +29,21 @@
 //   h00 = corner at (x,   z)      h10 = corner at (x+1, z)
 //   h11 = corner at (x+1, z+1)    h01 = corner at (x,   z+1)
 //
-// Guarantees (verified over seeds 1..5):
-//   * one SINGLE highest plateau (unique max height) with >= 4 flat tiles,
-//   * >= 25 flat tiles across the lowest levels,
-//   * >= 55% of all tiles flat (mostly-walkable plateaus),
-//   * ordinary tiles span <= 4 levels; every tile (incl. summit) spans <= 6,
-//     so no adjacent corner delta > 6, with the big cliffs occasional,
+// Guarantees at ruggedness 0 — verified by test/terrain.test.mjs on the REAL
+// level seeds levelToSeed(level) for ALL levels 0000-0199 (the whole rug-0 tier):
+//   * 31x31 grid, corner heights integers in 0..MAX_HEIGHT,
+//   * flat === (all 4 corners equal); height = plateau level / highest corner,
 //   * shared corners between adjacent tiles (continuous surface),
-//   * NON-monotonic relief: local ridges/basins across the map, not one hill,
-//   * deterministic: same integer seed -> byte-identical tiles, every run.
+//   * every tile (incl. summit) spans <= 6, so no adjacent corner delta > 6,
+//   * one SINGLE highest plateau (unique max height): the flat tiles at the top
+//     level form one connected area of >= 4 tiles,
+//   * >= 50% of all tiles flat (measured minimum 52.8%; NOT 55% — 11 of the
+//     200 rug-0 levels fall between 52.8% and 55%),
+//   * >= 25 flat tiles in the lowest band (level <= 4),
+//   * deterministic: same (seed, ruggedness) -> byte-identical tiles, every run.
+// Design intent (NOT asserted by tests): ordinary tiles span <= 4 levels with
+// the 6-level cliffs occasional; NON-monotonic relief (local ridges/basins
+// across the map, not one hill).
 
 export const MAP_SIZE = 31;      // tiles per side (original 31×31 grid)
 export const MAX_HEIGHT = 31;    // highest possible level (32 levels: 0..31)
@@ -46,7 +52,7 @@ const FIELD_MAX = 12;            // general (non-summit) ground tops out here
 const GEN_SPAN = 4;              // ordinary slope tiles span at most this
 const WALL_CAP = 6;              // hard cap incl. summit cliffs (1.5 world)
 // The general terrain is built at HALF resolution (a proven coarse pass that
-// reliably yields >=55% flat, like the old 8-level build) and then every level
+// yields a mostly-flat map — >=50% flat on every rug-0 level) and then every level
 // is DOUBLED. Doubling preserves flat tiles exactly (equal corners stay equal)
 // and doubles every span, so the coarse span-2 slopes become the 4-level steps
 // and the coarse span-1 steps become the gentle 2-level steps of the final map.
@@ -254,10 +260,13 @@ function flattenTiles(V, locked, N, freeMax, lip) {
 //   >0  => progressively harsher/choppier: bigger mid/high noise, less low-bias
 //          (gamma -> 1), fewer flatten/mode passes, wider coarse spans (bigger
 //          walls) and more distinct terraces. Continuous, not a hard switch.
-// Relaxed-but-guaranteed floors at ruggedness 1 (verified seeds 1..5): flat
-// tiles >= 40%, low-band flats >= 12, unique summit with >= 4 flat tiles ALWAYS,
-// and every hard cap kept ALWAYS (tile span <= 6, adjacent-corner delta <= 6,
-// MAX_HEIGHT 31, 31x31 grid, shared corners, deterministic per (seed, rug)).
+// Relaxed floors for ruggedness > 0 — verified by test/terrain.test.mjs on the
+// real level seeds (every 25th level of 0200-1999, every 100th of 2000-9999,
+// ruggedness from difficultyFor): flat tiles >= 40%, unique summit plateau with
+// >= 4 flat tiles, and every hard cap (tile span <= 6, heights 0..MAX_HEIGHT,
+// 31x31 grid, shared corners, deterministic per (seed, rug)). The low-band
+// target (>= 12 flats at level <= 4) is best-effort only: stage 3c tries, but
+// some rough levels end below it, so it is NOT a guarantee.
 export function generateTerrain(seed = 1, ruggedness = 0) {
   const rng = mulberry32(seed >>> 0);
   const N = VN;
@@ -311,10 +320,11 @@ export function generateTerrain(seed = 1, ruggedness = 0) {
     }
   }
 
-  // --- 2. Coarse terrace + flatten (the proven 55%-flat pass) ------------
+  // --- 2. Coarse terrace + flatten (the mostly-flat pass) -----------------
   // Widen plateaus (mode filter), cap coarse tile spans at COARSE_SPAN, then
   // greedily flatten. This is the same coarse algorithm the old 8-level build
-  // used, so it reliably yields >=55% flat with broad low basins.
+  // used, so it yields a mostly-flat map (>=50% flat at rug 0) with broad low
+  // basins.
   // At rug 0: coarseSpan = COARSE_SPAN (2) and nCoarseFlat = 3, so this is the
   // exact original sequence (mode; clamp; [flatten; clamp] x3). Higher ruggedness
   // widens the coarse span cap (bigger doubled walls) and runs FEWER flatten
@@ -347,7 +357,7 @@ export function generateTerrain(seed = 1, ruggedness = 0) {
   // coneLevel(cheb): a stepped terrace dropping by WALL_CAP (6) every 2 rings, so
   // each shelf is 2 vertices wide and contributes FLAT ring tiles (not just
   // slopes) while the tall summit reaches the surrounding field. The flat shelves
-  // keep the >=55% flat guarantee even with the reserved summit (24..31) sitting
+  // keep the >=50% flat guarantee even with the reserved summit (24..31) sitting
   // well above the FIELD_MAX (12) ground, and give the peak the terraced Sentinel
   // silhouette. Each shelf edge is a WALL_CAP cliff (the "occasional" big steps).
   const coneLevel = (cheb) => S - WALL_CAP * Math.ceil(cheb / 2);
@@ -410,6 +420,8 @@ export function generateTerrain(seed = 1, ruggedness = 0) {
   // GEN_SPAN lip so flats form readily). flattenTiles never removes a flat and
   // converges to a fixed point, so the loop terminates; the cone + span cap are
   // re-asserted each pass so the unique summit and span<=6 hold throughout.
+  // NOTE: the >=40% floor holds on all tested level seeds; the 12-low-flats
+  // floor does NOT always (the fixed point can stay below it on rough maps).
   //
   // At rug 0 the surface already clears both floors on the FIRST measurement, so
   // the loop breaks with ZERO extra passes => the default path stays byte-
