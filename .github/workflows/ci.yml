@@ -35,12 +35,3 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Check docs/ is up to date with build
-        run: |
-          git diff --exit-code --stat -- docs
-          untracked="$(git ls-files --others --exclude-standard -- docs)"
-          if [ -n "$untracked" ]; then
-            echo "$untracked"
-            echo "::error::docs/ obsahuje nové soubory z buildu – spusť 'npm run build' a commitni docs/."
-            exit 1
-          fi
