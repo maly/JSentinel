@@ -13,10 +13,12 @@ npm test
 
 ## Build
 
-`docs/` je generovaný výstup Vite buildu (GitHub Pages) a je verzovaný. Po změně zdrojů (`index.html`, `js/`, `public/`) spusť před commitem:
+`npm run build` generuje výstup Vite buildu do `docs/`. Složka **není verzovaná** (je v `.gitignore`):
 
 ```sh
 npm run build
 ```
 
-CI kontroluje, že commitnutý `docs/` odpovídá výstupu `npm run build`.
+## Nasazení
+
+GitHub Pages nasazuje workflow `pages` (`.github/workflows/pages.yml`) při každém pushi do `master` (nebo ručně přes *workflow_dispatch*). Workflow spustí testy, sestaví web a `docs/` publikuje jako Pages artefakt. V nastavení repa musí být Settings → Pages → Source nastavené na **GitHub Actions**.
