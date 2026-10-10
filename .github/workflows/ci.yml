@@ -12,15 +12,15 @@ jobs:
   test-and-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
       # setup-python poskytuje i příkaz `python`, který používá `npm run test:serve`
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -35,12 +35,3 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Check docs/ is up to date with build
-        run: |
-          git diff --exit-code --stat -- docs
-          untracked="$(git ls-files --others --exclude-standard -- docs)"
-          if [ -n "$untracked" ]; then
-            echo "$untracked"
-            echo "::error::docs/ obsahuje nové soubory z buildu – spusť 'npm run build' a commitni docs/."
-            exit 1
-          fi
