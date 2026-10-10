@@ -13,7 +13,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/rules.test.mjs && npm run test:serve",
+    "test": "node test/rules.test.mjs && node test/terrain.test.mjs && npm run test:serve",
     "test:serve": "python -m unittest discover -s test -p test_serve.py"
   },
   "repository": {
